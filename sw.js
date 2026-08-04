@@ -1,4 +1,4 @@
-const CACHE_NAME = "postal-barcode-rescue-v1";
+const CACHE_NAME = "barcode-buddy-v3";
 
 const APP_FILES = [
   "./",
@@ -44,15 +44,18 @@ self.addEventListener("fetch", (event) => {
       return fetch(event.request)
         .then((response) => {
           const copy = response.clone();
+
           caches.open(CACHE_NAME).then((cache) => {
             cache.put(event.request, copy).catch(() => {});
           });
+
           return response;
         })
         .catch(() => {
           if (event.request.mode === "navigate") {
             return caches.match("./index.html");
           }
+
           throw new Error("Offline resource unavailable");
         });
     })

@@ -1,12 +1,12 @@
 {
-  "name": "Postal Barcode Rescue",
-  "short_name": "Barcode Rescue",
-  "description": "Recover an existing package tracking barcode from a photo or tracking number.",
+  "name": "Barcode Buddy",
+  "short_name": "Barcode Buddy",
+  "description": "Recreate an existing package barcode from a photo or tracking number.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#f6f2ff",
-  "theme_color": "#21133f",
+  "background_color": "#eef6fc",
+  "theme_color": "#003b6f",
   "orientation": "any",
   "icons": [
     {

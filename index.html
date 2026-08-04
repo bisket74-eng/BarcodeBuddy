@@ -6,14 +6,14 @@
     name="viewport"
     content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover"
   />
-  <meta name="theme-color" content="#21133f" />
+  <meta name="theme-color" content="#003b6f" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta
     name="description"
-    content="Recover an existing package tracking barcode from a photo or tracking number."
+    content="Barcode Buddy helps recreate an existing package barcode from a photo or tracking number."
   />
-  <title>Postal Barcode Rescue</title>
+  <title>Barcode Buddy</title>
 
   <link rel="manifest" href="./manifest.json" />
   <link rel="icon" href="./icon-192.png" />
@@ -29,10 +29,7 @@
   <main class="app-shell">
     <header class="hero">
       <img class="hero-icon" src="./icon-192.png" alt="" />
-      <div>
-        <h1>Postal Barcode Rescue</h1>
-        <p>Photograph an existing label or enter its number with the pop-up ten-key.</p>
-      </div>
+      <h1>Barcode Buddy</h1>
     </header>
 
     <section class="action-grid" aria-label="Choose how to enter a barcode">
@@ -41,7 +38,7 @@
         <span>Take Photo</span>
       </button>
 
-      <button class="action-button number-action" id="openKeypadButton" type="button">
+      <button class="action-button number-action" id="openNumberButton" type="button">
         <span class="action-icon" aria-hidden="true">123</span>
         <span>Enter Number</span>
       </button>
@@ -55,18 +52,35 @@
       />
     </section>
 
-    <section class="number-panel">
-      <div class="section-label">Tracking number or pattern</div>
+    <section id="photoPanel" class="input-panel photo-panel" hidden>
+      <div class="panel-heading">
+        <h2>Reading label</h2>
+        <button id="cancelPhotoButton" class="panel-close" type="button" aria-label="Close photo">
+          ×
+        </button>
+      </div>
+
+      <img id="photoPreview" class="photo-preview" alt="Selected package label" />
+
+      <div class="photo-status" id="photoStatus" aria-live="polite"></div>
+
+      <div class="progress-track" id="progressTrack" hidden>
+        <div class="progress-bar" id="progressBar"></div>
+      </div>
+    </section>
+
+    <section id="numberPanel" class="input-panel number-panel" hidden>
+      <div class="panel-heading">
+        <h2>Enter barcode number</h2>
+        <button id="closeNumberButton" class="panel-close" type="button" aria-label="Close number entry">
+          ×
+        </button>
+      </div>
 
       <div class="number-row">
-        <button
-          id="numberDisplay"
-          class="number-display empty"
-          type="button"
-          aria-label="Open ten-key to enter the tracking number"
-        >
-          Tap to enter numbers
-        </button>
+        <div id="numberDisplay" class="number-display empty" aria-live="polite">
+          Enter numbers below
+        </div>
 
         <button id="clearButton" class="clear-button" type="button">
           Clear
@@ -77,67 +91,6 @@
         Use <strong>?</strong> for an unreadable digit. One question mark creates
         ten possible barcodes.
       </p>
-
-      <button id="generateButton" class="generate-button" type="button">
-        Create Barcode
-      </button>
-    </section>
-
-    <section id="photoPanel" class="photo-panel" hidden>
-      <div class="photo-heading">
-        <h2>Label photo</h2>
-        <button id="removePhotoButton" class="small-button" type="button">
-          Remove
-        </button>
-      </div>
-
-      <img id="photoPreview" class="photo-preview" alt="Selected package label" />
-
-      <div class="photo-status" id="photoStatus" aria-live="polite"></div>
-      <div class="progress-track" id="progressTrack" hidden>
-        <div class="progress-bar" id="progressBar"></div>
-      </div>
-    </section>
-
-    <section class="results-section">
-      <div class="results-heading">
-        <h2>Barcode Results</h2>
-        <span id="resultCount" class="result-count">0</span>
-      </div>
-
-      <div id="results" class="results" aria-live="polite">
-        <div class="empty-results">
-          Take a label photo or enter the complete number above.
-        </div>
-      </div>
-    </section>
-
-    <aside class="notice">
-      This tool only recreates a barcode for an existing tracking number. It does
-      not buy postage, create a shipment, or register tracking with USPS.
-    </aside>
-  </main>
-
-  <div id="keypadModal" class="modal" hidden>
-    <section
-      class="keypad-card"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="keypadTitle"
-    >
-      <div class="modal-heading">
-        <h2 id="keypadTitle">Enter tracking number</h2>
-        <button id="closeKeypadButton" class="modal-close" type="button" aria-label="Close">
-          ×
-        </button>
-      </div>
-
-      <button
-        id="keypadValue"
-        class="keypad-value"
-        type="button"
-        aria-label="Tracking number being edited"
-      ></button>
 
       <div class="cursor-controls">
         <button type="button" data-key="left" aria-label="Move cursor left">←</button>
@@ -160,31 +113,64 @@
         <button type="button" data-key="clear" class="key-clear">Clear</button>
       </div>
 
-      <button id="keypadDoneButton" class="keypad-done" type="button">
-        Done
+      <button id="generateButton" class="generate-button" type="button">
+        Create Barcode
       </button>
     </section>
-  </div>
 
-  <div id="fullscreenModal" class="fullscreen-modal" hidden>
     <button
-      id="closeFullscreenButton"
-      class="fullscreen-close"
+      id="currentNumberStrip"
+      class="current-number-strip"
       type="button"
-      aria-label="Close full-screen barcode"
+      aria-label="Edit the current barcode number"
+      hidden
     >
-      ×
+      <span>Barcode number</span>
+      <strong id="currentNumberValue"></strong>
+      <small>Edit</small>
     </button>
 
-    <div class="fullscreen-stage">
-      <canvas id="fullscreenCanvas"></canvas>
-      <div id="fullscreenNumber" class="fullscreen-number"></div>
-    </div>
+    <section class="results-section">
+      <div class="results-heading">
+        <h2>Barcode Results</h2>
+        <span id="resultCount" class="result-count">0</span>
+      </div>
 
-    <div id="fullscreenNavigation" class="fullscreen-navigation" hidden>
-      <button id="previousCandidateButton" type="button">Previous</button>
-      <span id="fullscreenPosition"></span>
-      <button id="nextCandidateButton" type="button">Next</button>
+      <div id="results" class="results" aria-live="polite">
+        <div class="empty-results">
+          Take a label photo or enter the complete number above.
+        </div>
+      </div>
+    </section>
+
+    <aside class="notice">
+      This recreates a barcode for an existing number. It does not create postage,
+      register a shipment, or guarantee that every original postal barcode can be
+      reconstructed from its printed number.
+    </aside>
+  </main>
+
+  <div id="fullscreenModal" class="fullscreen-modal" hidden>
+    <div class="fullscreen-surface">
+      <button
+        id="closeFullscreenButton"
+        class="fullscreen-close"
+        type="button"
+        aria-label="Close full-screen barcode"
+      >
+        ×
+      </button>
+
+      <div class="fullscreen-stage">
+        <canvas id="fullscreenCanvas"></canvas>
+        <div id="fullscreenNumber" class="fullscreen-number"></div>
+      </div>
+
+      <div id="fullscreenNavigation" class="fullscreen-navigation" hidden>
+        <button id="previousCandidateButton" type="button">Previous</button>
+        <span id="fullscreenPosition"></span>
+        <button id="nextCandidateButton" type="button">Next</button>
+      </div>
     </div>
   </div>
 

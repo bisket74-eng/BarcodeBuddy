@@ -3,23 +3,23 @@ const ZXING_URL =
 
 const elements = {
   takePhotoButton: document.getElementById("takePhotoButton"),
-  openKeypadButton: document.getElementById("openKeypadButton"),
+  openNumberButton: document.getElementById("openNumberButton"),
   cameraInput: document.getElementById("cameraInput"),
-  numberDisplay: document.getElementById("numberDisplay"),
-  clearButton: document.getElementById("clearButton"),
-  generateButton: document.getElementById("generateButton"),
   photoPanel: document.getElementById("photoPanel"),
   photoPreview: document.getElementById("photoPreview"),
   photoStatus: document.getElementById("photoStatus"),
   progressTrack: document.getElementById("progressTrack"),
   progressBar: document.getElementById("progressBar"),
-  removePhotoButton: document.getElementById("removePhotoButton"),
+  cancelPhotoButton: document.getElementById("cancelPhotoButton"),
+  numberPanel: document.getElementById("numberPanel"),
+  closeNumberButton: document.getElementById("closeNumberButton"),
+  numberDisplay: document.getElementById("numberDisplay"),
+  clearButton: document.getElementById("clearButton"),
+  generateButton: document.getElementById("generateButton"),
+  currentNumberStrip: document.getElementById("currentNumberStrip"),
+  currentNumberValue: document.getElementById("currentNumberValue"),
   results: document.getElementById("results"),
   resultCount: document.getElementById("resultCount"),
-  keypadModal: document.getElementById("keypadModal"),
-  closeKeypadButton: document.getElementById("closeKeypadButton"),
-  keypadValue: document.getElementById("keypadValue"),
-  keypadDoneButton: document.getElementById("keypadDoneButton"),
   fullscreenModal: document.getElementById("fullscreenModal"),
   closeFullscreenButton: document.getElementById("closeFullscreenButton"),
   fullscreenCanvas: document.getElementById("fullscreenCanvas"),
@@ -37,6 +37,9 @@ let candidates = [];
 let fullscreenIndex = 0;
 let currentPhotoUrl = "";
 let toastTimer = 0;
+let openedNativeFullscreen = false;
+let orientationLocked = false;
+let isClosingFullscreen = false;
 
 function showToast(message) {
   window.clearTimeout(toastTimer);
@@ -49,7 +52,7 @@ function showToast(message) {
 }
 
 function groupNumber(value) {
-  return value.replace(/(.{4})/g, "$1 ").trim();
+  return String(value || "").replace(/(.{4})/g, "$1 ").trim();
 }
 
 function sanitizeEditableNumber(value) {
@@ -60,58 +63,31 @@ function sanitizeEditableNumber(value) {
     .slice(0, 50);
 }
 
-function updateNumberDisplay() {
+function updateCurrentNumberStrip() {
+  const hasNumber = Boolean(numberText);
+  elements.currentNumberStrip.hidden = !hasNumber;
+
+  if (hasNumber) {
+    elements.currentNumberValue.textContent = groupNumber(numberText);
+  }
+}
+
+function renderNumberDisplay() {
+  elements.numberDisplay.innerHTML = "";
+
   if (!numberText) {
-    elements.numberDisplay.textContent = "Tap to enter numbers";
+    elements.numberDisplay.textContent = "Enter numbers below";
     elements.numberDisplay.classList.add("empty");
     return;
   }
 
-  elements.numberDisplay.textContent = groupNumber(numberText);
   elements.numberDisplay.classList.remove("empty");
-}
-
-function setNumberText(value) {
-  numberText = sanitizeEditableNumber(value);
-  keypadCaret = Math.min(keypadCaret, numberText.length);
-  updateNumberDisplay();
-  renderKeypadValue();
-}
-
-function openKeypad() {
-  keypadCaret = numberText.length;
-  renderKeypadValue();
-  elements.keypadModal.hidden = false;
-  document.body.style.overflow = "hidden";
-}
-
-function closeKeypad() {
-  elements.keypadModal.hidden = true;
-  document.body.style.overflow = "";
-}
-
-function renderKeypadValue() {
-  elements.keypadValue.innerHTML = "";
-
-  if (!numberText) {
-    const caret = document.createElement("span");
-    caret.className = "keypad-caret";
-    elements.keypadValue.appendChild(caret);
-
-    const hint = document.createElement("span");
-    hint.textContent = "Enter numbers";
-    hint.style.color = "#8c8496";
-    hint.style.letterSpacing = "normal";
-    hint.style.marginLeft = "5px";
-    elements.keypadValue.appendChild(hint);
-    return;
-  }
 
   for (let index = 0; index <= numberText.length; index += 1) {
     if (index === keypadCaret) {
       const caret = document.createElement("span");
       caret.className = "keypad-caret";
-      elements.keypadValue.appendChild(caret);
+      elements.numberDisplay.appendChild(caret);
     }
 
     if (index < numberText.length) {
@@ -119,21 +95,51 @@ function renderKeypadValue() {
       digit.className = "keypad-digit";
       digit.textContent = numberText[index];
       digit.dataset.index = String(index);
-      elements.keypadValue.appendChild(digit);
+      elements.numberDisplay.appendChild(digit);
 
       if ((index + 1) % 4 === 0 && index < numberText.length - 1) {
         const gap = document.createElement("span");
         gap.textContent = " ";
         gap.style.width = "0.35em";
-        elements.keypadValue.appendChild(gap);
+        elements.numberDisplay.appendChild(gap);
       }
     }
   }
 
   window.requestAnimationFrame(() => {
-    const caret = elements.keypadValue.querySelector(".keypad-caret");
+    const caret = elements.numberDisplay.querySelector(".keypad-caret");
     caret?.scrollIntoView({ inline: "center", block: "nearest" });
   });
+}
+
+function setNumberText(value) {
+  numberText = sanitizeEditableNumber(value);
+  keypadCaret = Math.min(keypadCaret, numberText.length);
+  renderNumberDisplay();
+  updateCurrentNumberStrip();
+}
+
+function closeInputPanels() {
+  elements.numberPanel.hidden = true;
+  elements.photoPanel.hidden = true;
+}
+
+function openNumberPanel() {
+  elements.photoPanel.hidden = true;
+  elements.numberPanel.hidden = false;
+  keypadCaret = numberText.length;
+  renderNumberDisplay();
+
+  window.setTimeout(() => {
+    elements.numberPanel.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest"
+    });
+  }, 40);
+}
+
+function closeNumberPanel() {
+  elements.numberPanel.hidden = true;
 }
 
 function insertAtCaret(character) {
@@ -148,8 +154,8 @@ function insertAtCaret(character) {
     numberText.slice(keypadCaret);
 
   keypadCaret += 1;
-  updateNumberDisplay();
-  renderKeypadValue();
+  renderNumberDisplay();
+  updateCurrentNumberStrip();
 }
 
 function backspaceAtCaret() {
@@ -162,8 +168,8 @@ function backspaceAtCaret() {
     numberText.slice(keypadCaret);
 
   keypadCaret -= 1;
-  updateNumberDisplay();
-  renderKeypadValue();
+  renderNumberDisplay();
+  updateCurrentNumberStrip();
 }
 
 function handleKeypadKey(key) {
@@ -179,21 +185,19 @@ function handleKeypadKey(key) {
 
   if (key === "left") {
     keypadCaret = Math.max(0, keypadCaret - 1);
-    renderKeypadValue();
+    renderNumberDisplay();
     return;
   }
 
   if (key === "right") {
     keypadCaret = Math.min(numberText.length, keypadCaret + 1);
-    renderKeypadValue();
+    renderNumberDisplay();
     return;
   }
 
   if (key === "clear") {
-    numberText = "";
+    setNumberText("");
     keypadCaret = 0;
-    updateNumberDisplay();
-    renderKeypadValue();
   }
 }
 
@@ -210,23 +214,26 @@ function setPhotoStatus(message, progress = null) {
   }
 }
 
-function clearPhoto() {
+function releasePhotoUrl() {
   if (currentPhotoUrl) {
     URL.revokeObjectURL(currentPhotoUrl);
     currentPhotoUrl = "";
   }
+}
 
-  elements.cameraInput.value = "";
-  elements.photoPreview.removeAttribute("src");
+function closePhotoPanel() {
   elements.photoPanel.hidden = true;
+  releasePhotoUrl();
+  elements.photoPreview.removeAttribute("src");
   setPhotoStatus("");
 }
 
 function clearEverything() {
   setNumberText("");
-  clearPhoto();
+  keypadCaret = 0;
   candidates = [];
   renderResults();
+  closePhotoPanel();
   showToast("Cleared");
 }
 
@@ -248,13 +255,13 @@ function extractBestOcrNumber(text) {
     .replace(/[Il|]/g, "1");
 
   const runs = normalized.match(/\d[\d\s-]{6,60}\d/g) || [];
-  const candidatesFound = runs
+  const found = runs
     .map((run) => run.replace(/\D/g, ""))
     .filter((run) => run.length >= 8 && run.length <= 50)
     .sort((a, b) => b.length - a.length);
 
-  if (candidatesFound.length) {
-    return candidatesFound[0];
+  if (found.length) {
+    return found[0];
   }
 
   const allDigits = normalized.replace(/\D/g, "");
@@ -278,7 +285,6 @@ async function decodeWithNativeDetector(image) {
 
     const detector = new BarcodeDetector({ formats: ["code_128"] });
     const results = await detector.detect(image);
-
     return results?.[0]?.rawValue || "";
   } catch (error) {
     console.warn("Native barcode detection failed.", error);
@@ -369,7 +375,8 @@ async function processPhoto(file) {
     return;
   }
 
-  clearPhoto();
+  closeNumberPanel();
+  releasePhotoUrl();
 
   currentPhotoUrl = URL.createObjectURL(file);
   elements.photoPreview.src = currentPhotoUrl;
@@ -391,11 +398,9 @@ async function processPhoto(file) {
 
     if (decodedDigits) {
       setNumberText(decodedDigits);
-      setPhotoStatus(
-        `Barcode read successfully: ${groupNumber(decodedDigits)}`,
-        null
-      );
-      generateCandidates();
+      closePhotoPanel();
+      generateCandidates({ closePanels: true, fromPhoto: true });
+      showToast("Barcode read from photo");
       return;
     }
 
@@ -409,26 +414,25 @@ async function processPhoto(file) {
 
     if (ocrNumber) {
       setNumberText(ocrNumber);
-      setPhotoStatus(
-        "Printed numbers found. Check them carefully and replace an unreadable digit with ?.",
-        null
-      );
-      openKeypad();
+      closePhotoPanel();
+      generateCandidates({ closePanels: true, fromPhoto: true });
+      showToast("Printed number read—tap the number line to correct it");
       return;
     }
 
-    setPhotoStatus(
-      "No complete number was found. Tap Enter Number and use ? for a missing digit.",
-      null
-    );
-    openKeypad();
+    closePhotoPanel();
+    openNumberPanel();
+    showToast("The photo could not be read. Enter the number below.");
   } catch (error) {
     console.error(error);
-    setPhotoStatus(
+    closePhotoPanel();
+    openNumberPanel();
+    showToast(
       error?.message ||
-        "The photo could not be read. Try a closer, straighter picture.",
-      null
+        "The photo could not be read. Try typing the number."
     );
+  } finally {
+    elements.cameraInput.value = "";
   }
 }
 
@@ -466,7 +470,7 @@ function expandCandidates(pattern) {
   return results;
 }
 
-function drawBarcode(canvas, value, large = false, includeText = false) {
+function drawBarcode(canvas, value, large = false) {
   if (!window.bwipjs?.toCanvas) {
     throw new Error("The barcode generator could not load.");
   }
@@ -477,31 +481,30 @@ function drawBarcode(canvas, value, large = false, includeText = false) {
     bcid: "code128",
     text: value,
     scale: large
-      ? Math.max(4, Math.round(pixelRatio * 2.3))
+      ? Math.max(4, Math.round(pixelRatio * 2.4))
       : Math.max(2, Math.round(pixelRatio * 1.15)),
     height: large ? 24 : 16,
-    includetext: includeText,
-    textxalign: "center",
-    textsize: 12,
-    paddingwidth: large ? 12 : 8,
+    includetext: false,
+    paddingwidth: large ? 14 : 8,
     paddingheight: large ? 8 : 5,
     backgroundcolor: "FFFFFF",
-    barcolor: "000000",
-    textcolor: "000000"
+    barcolor: "000000"
   });
 }
 
-function generateCandidates() {
+function generateCandidates(options = {}) {
+  const { closePanels = true } = options;
   const pattern = sanitizeEditableNumber(numberText);
 
   if (!pattern) {
     showToast("Enter a tracking number first");
-    openKeypad();
+    openNumberPanel();
     return;
   }
 
   if (pattern.length < 6) {
     showToast("That number is too short");
+    openNumberPanel();
     return;
   }
 
@@ -517,13 +520,23 @@ function generateCandidates() {
       return;
     }
 
+    numberText = pattern;
+    keypadCaret = numberText.length;
     candidates = expandCandidates(pattern);
+    updateCurrentNumberStrip();
+    renderNumberDisplay();
     renderResults();
 
-    document.querySelector(".results-section")?.scrollIntoView({
-      behavior: "smooth",
-      block: "start"
-    });
+    if (closePanels) {
+      closeInputPanels();
+    }
+
+    window.setTimeout(() => {
+      elements.currentNumberStrip.scrollIntoView({
+        behavior: "smooth",
+        block: "start"
+      });
+    }, 80);
   } catch (error) {
     showToast(error?.message || "The barcode could not be created.");
   }
@@ -546,6 +559,15 @@ function renderResults() {
     const card = document.createElement("article");
     card.className = "barcode-card";
 
+    const barcodeTap = document.createElement("button");
+    barcodeTap.type = "button";
+    barcodeTap.className = "barcode-tap";
+    barcodeTap.setAttribute(
+      "aria-label",
+      `Open barcode ${groupNumber(value)} in landscape full screen`
+    );
+    barcodeTap.addEventListener("click", () => openFullscreen(index));
+
     const barcodeWrap = document.createElement("div");
     barcodeWrap.className = "barcode-wrap";
 
@@ -556,14 +578,10 @@ function renderResults() {
     number.className = "candidate-number";
     number.textContent = groupNumber(value);
 
+    barcodeTap.append(barcodeWrap, number);
+
     const actions = document.createElement("div");
     actions.className = "card-actions";
-
-    const fullButton = document.createElement("button");
-    fullButton.className = "full-button";
-    fullButton.type = "button";
-    fullButton.textContent = "Full Screen";
-    fullButton.addEventListener("click", () => openFullscreen(index));
 
     const shareButton = document.createElement("button");
     shareButton.className = "share-button";
@@ -577,8 +595,8 @@ function renderResults() {
     downloadButton.textContent = "Download";
     downloadButton.addEventListener("click", () => downloadBarcode(value));
 
-    actions.append(fullButton, shareButton, downloadButton);
-    card.append(barcodeWrap, number, actions);
+    actions.append(shareButton, downloadButton);
+    card.append(barcodeTap, actions);
     elements.results.appendChild(card);
 
     try {
@@ -590,16 +608,96 @@ function renderResults() {
   });
 }
 
-function openFullscreen(index) {
+function shouldUseRotatedFallback() {
+  return window.innerHeight > window.innerWidth && !orientationLocked;
+}
+
+function applyFullscreenOrientation() {
+  elements.fullscreenModal.classList.toggle(
+    "force-landscape",
+    shouldUseRotatedFallback()
+  );
+}
+
+async function tryNativeLandscape() {
+  openedNativeFullscreen = false;
+  orientationLocked = false;
+
+  try {
+    if (
+      !document.fullscreenElement &&
+      typeof elements.fullscreenModal.requestFullscreen === "function"
+    ) {
+      await elements.fullscreenModal.requestFullscreen({
+        navigationUI: "hide"
+      });
+      openedNativeFullscreen = true;
+    }
+  } catch (error) {
+    console.warn("Full-screen request was blocked.", error);
+  }
+
+  try {
+    if (screen.orientation?.lock) {
+      await screen.orientation.lock("landscape");
+      orientationLocked = true;
+    }
+  } catch (error) {
+    console.warn("Landscape orientation lock was blocked.", error);
+  }
+
+  applyFullscreenOrientation();
+}
+
+async function openFullscreen(index) {
   fullscreenIndex = Math.max(0, Math.min(candidates.length - 1, index));
   elements.fullscreenModal.hidden = false;
   document.body.style.overflow = "hidden";
   renderFullscreen();
+
+  await tryNativeLandscape();
+
+  window.setTimeout(() => {
+    applyFullscreenOrientation();
+    renderFullscreen();
+  }, 220);
 }
 
-function closeFullscreen() {
+async function closeFullscreen(options = {}) {
+  if (isClosingFullscreen) {
+    return;
+  }
+
+  isClosingFullscreen = true;
+
+  try {
+    if (screen.orientation?.unlock) {
+      screen.orientation.unlock();
+    }
+  } catch (error) {
+    console.warn("Could not unlock orientation.", error);
+  }
+
+  orientationLocked = false;
+  elements.fullscreenModal.classList.remove("force-landscape");
   elements.fullscreenModal.hidden = true;
   document.body.style.overflow = "";
+
+  if (
+    options.exitNative !== false &&
+    openedNativeFullscreen &&
+    document.fullscreenElement &&
+    typeof document.exitFullscreen === "function"
+  ) {
+    try {
+      await document.exitFullscreen();
+    } catch (error) {
+      console.warn("Could not exit browser full screen.", error);
+    }
+  }
+
+  openedNativeFullscreen = false;
+  isClosingFullscreen = false;
 }
 
 function renderFullscreen() {
@@ -627,7 +725,7 @@ function renderFullscreen() {
 
 function createExportCanvas(value) {
   const barcodeCanvas = document.createElement("canvas");
-  drawBarcode(barcodeCanvas, value, true, false);
+  drawBarcode(barcodeCanvas, value, true);
 
   const padding = 42;
   const numberHeight = 86;
@@ -679,10 +777,7 @@ async function shareBarcode(value) {
       { type: "image/png" }
     );
 
-    if (
-      navigator.share &&
-      navigator.canShare?.({ files: [file] })
-    ) {
+    if (navigator.share && navigator.canShare?.({ files: [file] })) {
       await navigator.share({
         files: [file],
         title: "Package barcode"
@@ -723,37 +818,37 @@ function downloadBlob(blob, filename) {
 }
 
 elements.takePhotoButton.addEventListener("click", () => {
+  closeNumberPanel();
   elements.cameraInput.click();
 });
 
-elements.openKeypadButton.addEventListener("click", openKeypad);
-elements.numberDisplay.addEventListener("click", openKeypad);
+elements.openNumberButton.addEventListener("click", () => {
+  if (elements.numberPanel.hidden) {
+    openNumberPanel();
+  } else {
+    closeNumberPanel();
+  }
+});
+
+elements.currentNumberStrip.addEventListener("click", openNumberPanel);
+elements.closeNumberButton.addEventListener("click", closeNumberPanel);
+elements.cancelPhotoButton.addEventListener("click", closePhotoPanel);
 elements.clearButton.addEventListener("click", clearEverything);
-elements.generateButton.addEventListener("click", generateCandidates);
-elements.removePhotoButton.addEventListener("click", clearPhoto);
+elements.generateButton.addEventListener("click", () => {
+  generateCandidates({ closePanels: true });
+});
 
 elements.cameraInput.addEventListener("change", () => {
   processPhoto(elements.cameraInput.files?.[0]);
 });
 
-elements.closeKeypadButton.addEventListener("click", closeKeypad);
-elements.keypadDoneButton.addEventListener("click", closeKeypad);
-
-elements.keypadModal.addEventListener("click", (event) => {
-  if (event.target === elements.keypadModal) {
-    closeKeypad();
-  }
+document.querySelectorAll("[data-key]").forEach((button) => {
+  button.addEventListener("click", () => {
+    handleKeypadKey(button.dataset.key || "");
+  });
 });
 
-document
-  .querySelectorAll("[data-key]")
-  .forEach((button) => {
-    button.addEventListener("click", () => {
-      handleKeypadKey(button.dataset.key || "");
-    });
-  });
-
-elements.keypadValue.addEventListener("click", (event) => {
+elements.numberDisplay.addEventListener("click", (event) => {
   const target = event.target.closest(".keypad-digit");
 
   if (!target) {
@@ -762,15 +857,11 @@ elements.keypadValue.addEventListener("click", (event) => {
     keypadCaret = Number(target.dataset.index) || 0;
   }
 
-  renderKeypadValue();
+  renderNumberDisplay();
 });
 
-elements.closeFullscreenButton.addEventListener("click", closeFullscreen);
-
-elements.fullscreenModal.addEventListener("click", (event) => {
-  if (event.target === elements.fullscreenModal) {
-    closeFullscreen();
-  }
+elements.closeFullscreenButton.addEventListener("click", () => {
+  closeFullscreen();
 });
 
 elements.previousCandidateButton.addEventListener("click", () => {
@@ -789,17 +880,34 @@ elements.nextCandidateButton.addEventListener("click", () => {
 
 window.addEventListener("resize", () => {
   if (!elements.fullscreenModal.hidden && candidates.length) {
+    applyFullscreenOrientation();
     renderFullscreen();
   }
 });
 
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
-    if (!elements.fullscreenModal.hidden) {
-      closeFullscreen();
-    } else if (!elements.keypadModal.hidden) {
-      closeKeypad();
+window.addEventListener("orientationchange", () => {
+  window.setTimeout(() => {
+    if (!elements.fullscreenModal.hidden && candidates.length) {
+      applyFullscreenOrientation();
+      renderFullscreen();
     }
+  }, 180);
+});
+
+document.addEventListener("fullscreenchange", () => {
+  if (
+    openedNativeFullscreen &&
+    !document.fullscreenElement &&
+    !elements.fullscreenModal.hidden &&
+    !isClosingFullscreen
+  ) {
+    closeFullscreen({ exitNative: false });
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !elements.fullscreenModal.hidden) {
+    closeFullscreen();
   }
 });
 
@@ -811,6 +919,6 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-updateNumberDisplay();
-renderKeypadValue();
+renderNumberDisplay();
+updateCurrentNumberStrip();
 renderResults();
