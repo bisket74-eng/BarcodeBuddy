@@ -3,8 +3,17 @@ const ZXING_URL =
 const ZXING_LIBRARY_URL =
   "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/+esm";
 
-const MAX_BARCODE_LENGTH = 22;
-const EXPECTED_GROUP_LENGTHS = [4, 4, 4, 4, 4, 2];
+const ALLOWED_BARCODE_LENGTHS = [22, 24, 26];
+const MAX_BARCODE_LENGTH = 26;
+const EXPECTED_GROUP_PATTERNS = [
+  [4, 4, 4, 4, 4, 2],
+  [4, 4, 4, 4, 4, 4],
+  [4, 4, 4, 4, 4, 4, 2]
+];
+
+function isAllowedBarcodeLength(length) {
+  return ALLOWED_BARCODE_LENGTHS.includes(length);
+}
 
 const elements = {
   takePhotoButton: document.getElementById("takePhotoButton"),
@@ -19,6 +28,7 @@ const elements = {
   numberPanel: document.getElementById("numberPanel"),
   closeNumberButton: document.getElementById("closeNumberButton"),
   numberDisplay: document.getElementById("numberDisplay"),
+  clearButton: document.getElementById("clearButton"),
   generateButton: document.getElementById("generateButton"),
   currentNumberStrip: document.getElementById("currentNumberStrip"),
   currentNumberValue: document.getElementById("currentNumberValue"),
@@ -27,15 +37,27 @@ const elements = {
   notice: document.getElementById("notice"),
   results: document.getElementById("results"),
   resultCount: document.getElementById("resultCount"),
+  fullscreenModal: document.getElementById("fullscreenModal"),
+  closeFullscreenButton: document.getElementById("closeFullscreenButton"),
+  fullscreenCanvas: document.getElementById("fullscreenCanvas"),
+  fullscreenNumber: document.getElementById("fullscreenNumber"),
+  fullscreenNavigation: document.getElementById("fullscreenNavigation"),
+  previousCandidateButton: document.getElementById("previousCandidateButton"),
+  nextCandidateButton: document.getElementById("nextCandidateButton"),
+  fullscreenPosition: document.getElementById("fullscreenPosition"),
   toast: document.getElementById("toast")
 };
 
 let numberText = "";
 let keypadCaret = 0;
 let candidates = [];
+let fullscreenIndex = 0;
 let currentPhotoUrl = "";
 let toastTimer = 0;
-let foundBarcodes = [];
+let isClosingFullscreen = false;
+let ocrWorker = null;
+let ocrWorkerPromise = null;
+let ocrProgressStage = "Preparing number reader";
 
 const HISTORY_VIEW_KEY = "barcodeBuddyView";
 
@@ -54,18 +76,16 @@ function getHistoryView() {
 }
 
 function setHistoryView(view, options = {}) {
-  const { replace = false, forcePush = false } = options;
+  const { replace = false } = options;
   const state = {
     ...(history.state || {}),
     [HISTORY_VIEW_KEY]: view
   };
 
-  if (replace) {
+  if (replace || getHistoryView()) {
     history.replaceState(state, "", window.location.href);
-  } else if (forcePush || !getHistoryView()) {
-    history.pushState(state, "", window.location.href);
   } else {
-    history.replaceState(state, "", window.location.href);
+    history.pushState(state, "", window.location.href);
   }
 }
 
@@ -88,6 +108,8 @@ function closeInputHistoryIfOpen() {
 function closeAllTransientViewsDirectly() {
   elements.numberPanel.hidden = true;
   elements.photoPanel.hidden = true;
+  elements.fullscreenModal.hidden = true;
+  elements.fullscreenModal.classList.remove("force-landscape");
   document.body.style.overflow = "";
   updateInputOpenState();
 }
@@ -105,45 +127,19 @@ function sanitizeEditableNumber(value) {
 }
 
 function updateCurrentNumberStrip() {
-  const hasEditableNumber = Boolean(numberText);
-  const hasResults = candidates.length > 0;
-  const hasContent = hasEditableNumber || hasResults;
+  const hasNumber = Boolean(numberText);
+  elements.currentNumberStrip.hidden = !hasNumber;
 
-  elements.currentNumberStrip.hidden = !hasContent;
-
-  if (!hasContent) {
-    elements.currentNumberValue.textContent = "";
-    elements.currentNumberValue.disabled = false;
-    elements.currentNumberValue.classList.remove("results-summary");
-    return;
-  }
-
-  if (hasEditableNumber) {
+  if (hasNumber) {
     elements.currentNumberValue.textContent = groupNumber(numberText);
-    elements.currentNumberValue.disabled = false;
-    elements.currentNumberValue.classList.remove("results-summary");
-    elements.currentNumberValue.setAttribute(
-      "aria-label",
-      "Edit the current barcode number"
-    );
-  } else {
-    elements.currentNumberValue.textContent =
-      `${candidates.length} barcode${candidates.length === 1 ? "" : "s"} from photo`;
-    elements.currentNumberValue.disabled = true;
-    elements.currentNumberValue.classList.add("results-summary");
-    elements.currentNumberValue.setAttribute(
-      "aria-label",
-      `${candidates.length} barcode${candidates.length === 1 ? "" : "s"} from photo`
-    );
-  }
 
-  window.requestAnimationFrame(() => {
-    elements.currentNumberValue.scrollLeft = 0;
-  });
+    window.requestAnimationFrame(() => {
+      elements.currentNumberValue.scrollLeft = 0;
+    });
+  }
 }
 
 function renderNumberDisplay() {
-  keypadCaret = Math.max(0, Math.min(keypadCaret, numberText.length));
   elements.numberDisplay.innerHTML = "";
 
   if (!numberText) {
@@ -179,21 +175,7 @@ function renderNumberDisplay() {
 
   window.requestAnimationFrame(() => {
     const caret = elements.numberDisplay.querySelector(".keypad-caret");
-
-    if (!caret) {
-      return;
-    }
-
-    const displayRect = elements.numberDisplay.getBoundingClientRect();
-    const caretRect = caret.getBoundingClientRect();
-
-    if (caretRect.right > displayRect.right - 12) {
-      elements.numberDisplay.scrollLeft +=
-        caretRect.right - displayRect.right + 18;
-    } else if (caretRect.left < displayRect.left + 12) {
-      elements.numberDisplay.scrollLeft -=
-        displayRect.left - caretRect.left + 18;
-    }
+    caret?.scrollIntoView({ inline: "center", block: "nearest" });
   });
 }
 
@@ -247,7 +229,7 @@ function closeNumberPanel() {
 
 function insertAtCaret(character) {
   if (numberText.length >= MAX_BARCODE_LENGTH) {
-    showToast(`Barcode numbers are limited to ${MAX_BARCODE_LENGTH} digits`);
+    showToast("Barcode numbers are limited to 26 digits");
     return;
   }
 
@@ -333,52 +315,36 @@ function closePhotoPanel() {
 }
 
 function clearEverything() {
-  numberText = "";
+  setNumberText("");
   keypadCaret = 0;
   candidates = [];
-  foundBarcodes = [];
-  renderNumberDisplay();
-  updateCurrentNumberStrip();
   renderResults();
   closePhotoPanel();
   showToast("Cleared");
 }
 
-function uniqueValues(values) {
-  return [...new Set(values.filter(Boolean))];
-}
-
-function extractDecodedDigitList(text) {
+function extractDecodedDigits(text) {
   const raw = String(text || "").replace(/\u001d/g, "|");
-  const found = raw.match(/\d{22}/g) || [];
+
+  for (const length of [...ALLOWED_BARCODE_LENGTHS].sort((a, b) => b - a)) {
+    const exactRunPattern = new RegExp(`(?:^|\\D)(\\d{${length}})(?!\\d)`);
+    const match = raw.match(exactRunPattern);
+
+    if (match) {
+      return match[1];
+    }
+  }
 
   const separatedRuns = raw
     .split("|")
     .map((part) => part.replace(/\D/g, ""))
     .filter(Boolean);
 
-  separatedRuns.forEach((run) => {
-    if (run.length === MAX_BARCODE_LENGTH) {
-      found.push(run);
-    }
-  });
+  const exactSeparated = separatedRuns.find((run) =>
+    isAllowedBarcodeLength(run.length)
+  );
 
-  // Some GS1-128 results contain routing data first and the 22-digit
-  // tracking number as the final section. Only use that when a GS separator
-  // was actually present; never take the first 22 digits of unrelated data.
-  if (raw.includes("|")) {
-    const finalRun = separatedRuns.at(-1) || "";
-
-    if (finalRun.length >= MAX_BARCODE_LENGTH) {
-      found.push(finalRun.slice(-MAX_BARCODE_LENGTH));
-    }
-  }
-
-  return uniqueValues(found);
-}
-
-function extractDecodedDigits(text) {
-  return extractDecodedDigitList(text)[0] || "";
+  return exactSeparated || "";
 }
 
 function normalizeOcrCharacter(character) {
@@ -424,9 +390,13 @@ function patternFromOcrLine(line) {
     .map(normalizeOcrGroup)
     .filter(Boolean);
 
-  if (groups.length === EXPECTED_GROUP_LENGTHS.length) {
+  for (const groupPattern of EXPECTED_GROUP_PATTERNS) {
+    if (groups.length !== groupPattern.length) {
+      continue;
+    }
+
     const rebuilt = groups.map((group, index) => {
-      const expected = EXPECTED_GROUP_LENGTHS[index];
+      const expected = groupPattern[index];
 
       if (group.length > expected || group.length < expected - 1) {
         return "";
@@ -435,64 +405,43 @@ function patternFromOcrLine(line) {
       return group.padEnd(expected, "?");
     });
 
-    if (rebuilt.every(Boolean)) {
-      return rebuilt.join("");
+    const candidate = rebuilt.every(Boolean)
+      ? rebuilt.join("")
+      : "";
+
+    if (isAllowedBarcodeLength(candidate.length)) {
+      return candidate;
     }
   }
 
   const compact = normalizeOcrGroup(trimmed.replace(/\s+/g, ""));
 
-  if (compact.length === MAX_BARCODE_LENGTH) {
-    return compact;
-  }
-
-  return "";
+  return isAllowedBarcodeLength(compact.length)
+    ? compact
+    : "";
 }
 
-function extractAllOcrPatterns(text) {
+function extractBestOcrPattern(text) {
   const lines = String(text || "")
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
 
-  const patterns = [];
-
-  lines.forEach((line) => {
-    const exactRuns = line.match(/\d{22}/g) || [];
-    patterns.push(...exactRuns);
-
-    const groupedMatches =
-      line.match(/(?:[0-9OoQDIil|!ZSsGgBb]{3,4}[\s\-_.]+){5}[0-9OoQDIil|!ZSsGgBb]{1,2}/g) || [];
-
-    groupedMatches.forEach((match) => {
-      const pattern = patternFromOcrLine(match);
-
-      if (pattern) {
-        patterns.push(pattern);
-      }
+  const patterns = lines
+    .map(patternFromOcrLine)
+    .filter((pattern) => isAllowedBarcodeLength(pattern.length))
+    .sort((a, b) => {
+      const unknownA = (a.match(/\?/g) || []).length;
+      const unknownB = (b.match(/\?/g) || []).length;
+      return unknownA - unknownB;
     });
 
-    const wholeLinePattern = patternFromOcrLine(line);
-
-    if (wholeLinePattern) {
-      patterns.push(wholeLinePattern);
-    }
-  });
-
-  return uniqueValues(patterns).sort((a, b) => {
-    const unknownA = (a.match(/\?/g) || []).length;
-    const unknownB = (b.match(/\?/g) || []).length;
-    return unknownA - unknownB;
-  });
+  return patterns[0] || "";
 }
 
-function extractBestOcrPattern(text) {
-  return extractAllOcrPatterns(text)[0] || "";
-}
-
-async function decodeAllWithNativeDetector(image) {
+async function decodeWithNativeDetector(image) {
   if (!("BarcodeDetector" in window)) {
-    return [];
+    return "";
   }
 
   try {
@@ -502,21 +451,16 @@ async function decodeAllWithNativeDetector(image) {
         : ["code_128"];
 
     if (!supported.includes("code_128")) {
-      return [];
+      return "";
     }
 
     const detector = new BarcodeDetector({ formats: ["code_128"] });
     const results = await detector.detect(image);
-    return uniqueValues((results || []).map((result) => result?.rawValue || ""));
+    return results?.[0]?.rawValue || "";
   } catch (error) {
     console.warn("Native barcode detection failed.", error);
-    return [];
+    return "";
   }
-}
-
-async function decodeWithNativeDetector(image) {
-  const results = await decodeAllWithNativeDetector(image);
-  return results[0] || "";
 }
 
 async function decodeWithZxing(image) {
@@ -548,8 +492,13 @@ async function decodeWithZxing(image) {
 }
 
 function makeOcrCanvas(image) {
-  const maxWidth = 1900;
-  const scale = Math.min(3, maxWidth / image.naturalWidth);
+  const maxWidth = 1350;
+  const maxUpscale = 1.4;
+  const scale = Math.min(
+    maxUpscale,
+    maxWidth / Math.max(1, image.naturalWidth)
+  );
+
   const width = Math.max(1, Math.round(image.naturalWidth * scale));
   const height = Math.max(1, Math.round(image.naturalHeight * scale));
 
@@ -569,9 +518,11 @@ function makeOcrCanvas(image) {
       data[index + 1] * 0.587 +
       data[index + 2] * 0.114;
 
-    const contrasted = gray < 150
-      ? Math.max(0, gray * 0.55)
-      : Math.min(255, 190 + (gray - 150) * 1.5);
+    // Moderate contrast is faster and preserves faint printed digits better
+    // than the previous very strong enlargement and thresholding.
+    const contrasted = gray < 145
+      ? Math.max(0, gray * 0.68)
+      : Math.min(255, 178 + (gray - 145) * 1.42);
 
     data[index] = contrasted;
     data[index + 1] = contrasted;
@@ -582,123 +533,176 @@ function makeOcrCanvas(image) {
   return canvas;
 }
 
-function makeOcrRegions(image) {
-  const full = makeOcrCanvas(image);
-  const regions = [full];
-  const starts = [0.34, 0.48, 0.62, 0.74];
-  const heights = [0.28, 0.24, 0.22, 0.20];
+function cropCanvas(source, startRatio, heightRatio) {
+  const y = Math.max(0, Math.round(source.height * startRatio));
+  const height = Math.max(
+    1,
+    Math.min(
+      source.height - y,
+      Math.round(source.height * heightRatio)
+    )
+  );
 
-  starts.forEach((start, index) => {
-    const y = Math.round(full.height * start);
-    const height = Math.min(
-      full.height - y,
-      Math.round(full.height * heights[index])
-    );
+  const crop = document.createElement("canvas");
+  crop.width = source.width;
+  crop.height = height;
 
-    if (height < 35) {
-      return;
-    }
+  const context = crop.getContext("2d");
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, crop.width, crop.height);
+  context.drawImage(
+    source,
+    0, y, source.width, height,
+    0, 0, source.width, height
+  );
 
-    const crop = document.createElement("canvas");
-    crop.width = full.width;
-    crop.height = height;
-    crop.getContext("2d").drawImage(
-      full,
-      0, y, full.width, height,
-      0, 0, full.width, height
-    );
-    regions.push(crop);
-  });
-
-  return regions;
+  return crop;
 }
 
-async function runOcrPatterns(image) {
+function stackOcrRegions(regions) {
+  const gap = 24;
+  const width = Math.max(...regions.map((region) => region.width));
+  const height =
+    regions.reduce((total, region) => total + region.height, 0) +
+    gap * Math.max(0, regions.length - 1);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+
+  const context = canvas.getContext("2d");
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, width, height);
+
+  let y = 0;
+
+  regions.forEach((region, index) => {
+    context.drawImage(region, 0, y);
+    y += region.height;
+
+    if (index < regions.length - 1) {
+      y += gap;
+    }
+  });
+
+  return canvas;
+}
+
+function makeFastOcrRegion(fullCanvas) {
+  // The human-readable number is normally under the long package barcode.
+  // Stack the likely middle/lower strips into one image so Tesseract only
+  // performs one recognition pass instead of several separate passes.
+  return stackOcrRegions([
+    cropCanvas(fullCanvas, 0.34, 0.22),
+    cropCanvas(fullCanvas, 0.53, 0.22),
+    cropCanvas(fullCanvas, 0.72, 0.19)
+  ]);
+}
+
+async function getOcrWorker() {
   if (!window.Tesseract?.createWorker) {
     throw new Error("OCR could not load. Check the internet connection.");
   }
 
-  const regions = makeOcrRegions(image);
-  const worker = await Tesseract.createWorker("eng", 1, {
-    logger(message) {
-      if (message.status === "recognizing text") {
-        const percent = Math.round((message.progress || 0) * 100);
-        setPhotoStatus(`Reading barcode numbers… ${percent}%`, percent);
-      } else {
-        setPhotoStatus("Preparing number reader…", 8);
+  if (ocrWorker) {
+    return ocrWorker;
+  }
+
+  if (!ocrWorkerPromise) {
+    ocrWorkerPromise = Tesseract.createWorker("eng", 1, {
+      logger(message) {
+        if (message.status === "recognizing text") {
+          const percent = Math.round((message.progress || 0) * 100);
+          setPhotoStatus(
+            `${ocrProgressStage}… ${percent}%`,
+            percent
+          );
+        } else if (
+          message.status === "loading tesseract core" ||
+          message.status === "initializing tesseract" ||
+          message.status === "loading language traineddata"
+        ) {
+          setPhotoStatus("Loading the number reader…", 6);
+        }
       }
-    }
+    })
+      .then(async (worker) => {
+        await worker.setParameters({
+          tessedit_char_whitelist:
+            "0123456789OoQDIil|!ZSsGgBb -_.",
+          preserve_interword_spaces: "1",
+          tessedit_pageseg_mode: "6"
+        });
+
+        ocrWorker = worker;
+        return worker;
+      })
+      .catch((error) => {
+        ocrWorkerPromise = null;
+        throw error;
+      });
+  }
+
+  return ocrWorkerPromise;
+}
+
+function countUnknownDigits(pattern) {
+  return (String(pattern || "").match(/\?/g) || []).length;
+}
+
+function chooseBetterPattern(first, second) {
+  if (!first) return second || "";
+  if (!second) return first;
+
+  return countUnknownDigits(second) < countUnknownDigits(first)
+    ? second
+    : first;
+}
+
+async function recognizeOcrPattern(worker, canvas, options = {}) {
+  const {
+    stage = "Reading the postal number",
+    pageSegmentationMode = "6"
+  } = options;
+
+  ocrProgressStage = stage;
+
+  await worker.setParameters({
+    tessedit_char_whitelist:
+      "0123456789OoQDIil|!ZSsGgBb -_.",
+    preserve_interword_spaces: "1",
+    tessedit_pageseg_mode: pageSegmentationMode
   });
 
-  try {
-    await worker.setParameters({
-      tessedit_char_whitelist: "0123456789OoQDIil|!ZSsGgBb -_.",
-      preserve_interword_spaces: "1",
-      tessedit_pageseg_mode: "6"
-    });
-
-    const patterns = [];
-
-    for (const region of regions) {
-      const result = await worker.recognize(region);
-      patterns.push(...extractAllOcrPatterns(result?.data?.text || ""));
-    }
-
-    return uniqueValues(patterns).sort((a, b) => {
-      const unknownA = (a.match(/\?/g) || []).length;
-      const unknownB = (b.match(/\?/g) || []).length;
-      return unknownA - unknownB;
-    });
-  } finally {
-    await worker.terminate();
-  }
+  const result = await worker.recognize(canvas);
+  return extractBestOcrPattern(result?.data?.text || "");
 }
 
 async function runOcr(image) {
-  const patterns = await runOcrPatterns(image);
-  return patterns[0] || "";
-}
+  const worker = await getOcrWorker();
+  const fullCanvas = makeOcrCanvas(image);
+  const fastRegion = makeFastOcrRegion(fullCanvas);
 
-function showDetectedBarcodes(values) {
-  foundBarcodes = uniqueValues(
-    values
-      .map((value) => sanitizeEditableNumber(value))
-      .filter((value) => /^\d{22}$/.test(value))
-  );
+  // Fast path: one OCR pass over only the likely number areas.
+  let bestPattern = await recognizeOcrPattern(worker, fastRegion, {
+    stage: "Reading the likely postal number",
+    pageSegmentationMode: "6"
+  });
 
-  if (!foundBarcodes.length) {
-    return false;
+  if (bestPattern && countUnknownDigits(bestPattern) <= 2) {
+    return bestPattern;
   }
 
-  candidates = [...foundBarcodes];
+  // Accuracy fallback: only when needed, inspect the whole reduced image once.
+  setPhotoStatus("Checking the full picture…", 15);
 
-  if (foundBarcodes.length === 1) {
-    numberText = foundBarcodes[0];
-    keypadCaret = numberText.length;
-  } else {
-    numberText = "";
-    keypadCaret = 0;
-  }
+  const fullPattern = await recognizeOcrPattern(worker, fullCanvas, {
+    stage: "Checking the full picture",
+    pageSegmentationMode: "11"
+  });
 
-  closePhotoPanel();
-  renderNumberDisplay();
-  updateCurrentNumberStrip();
-  renderResults();
-  closeInputHistoryIfOpen();
-
-  window.setTimeout(() => {
-    elements.currentNumberStrip.scrollIntoView({
-      behavior: "smooth",
-      block: "start"
-    });
-  }, 80);
-
-  showToast(
-    foundBarcodes.length === 1
-      ? "Barcode read from photo"
-      : `${foundBarcodes.length} barcodes found`
-  );
-  return true;
+  bestPattern = chooseBetterPattern(bestPattern, fullPattern);
+  return bestPattern;
 }
 
 async function processPhoto(file) {
@@ -706,13 +710,10 @@ async function processPhoto(file) {
     return;
   }
 
-  // A new photo must never reuse the previous label's number or list.
-  numberText = "";
+  // A new photo must never reuse the previous label's number.
+  setNumberText("");
   keypadCaret = 0;
   candidates = [];
-  foundBarcodes = [];
-  renderNumberDisplay();
-  updateCurrentNumberStrip();
   renderResults();
 
   const replaceExistingView = Boolean(getHistoryView());
@@ -725,67 +726,48 @@ async function processPhoto(file) {
   elements.photoPreview.src = currentPhotoUrl;
   elements.photoPanel.hidden = false;
   updateInputOpenState();
-  setPhotoStatus("Loading photo…", 3);
+  setPhotoStatus("Loading label photo…", 3);
 
   try {
     await elements.photoPreview.decode();
 
-    setPhotoStatus("Looking for barcodes…", 12);
+    setPhotoStatus("Trying to read the barcode…", 12);
 
-    const decodedValues = await decodeAllWithNativeDetector(
-      elements.photoPreview
-    );
+    let decoded = await decodeWithNativeDetector(elements.photoPreview);
 
-    if (!decodedValues.length) {
-      const zxingValue = await decodeWithZxing(elements.photoPreview);
-
-      if (zxingValue) {
-        decodedValues.push(zxingValue);
-      }
+    if (!decoded) {
+      decoded = await decodeWithZxing(elements.photoPreview);
     }
 
-    const decodedNumbers = uniqueValues(
-      decodedValues.flatMap(extractDecodedDigitList)
-    );
+    const decodedDigits = extractDecodedDigits(decoded);
 
-    if (decodedNumbers.length > 1) {
-      showDetectedBarcodes(decodedNumbers);
+    if (decodedDigits) {
+      setNumberText(decodedDigits);
+      closePhotoPanel();
+      generateCandidates({ closePanels: true, fromPhoto: true });
+      showToast("Barcode read from photo");
       return;
     }
 
     setPhotoStatus(
-      decodedNumbers.length
-        ? "One barcode was found. Checking for any others…"
-        : "Trying to read the printed numbers…",
+      "The barcode did not scan. Trying to read the printed numbers…",
       18
     );
 
-    const ocrPatterns = await runOcrPatterns(elements.photoPreview);
-    const exactOcrNumbers = ocrPatterns.filter((pattern) => /^\d{22}$/.test(pattern));
-    const allExactNumbers = uniqueValues([
-      ...decodedNumbers,
-      ...exactOcrNumbers
-    ]);
+    const ocrPattern = await runOcr(elements.photoPreview);
 
-    if (allExactNumbers.length) {
-      showDetectedBarcodes(allExactNumbers);
-      return;
-    }
-
-    const bestPattern = ocrPatterns[0] || "";
-
-    if (bestPattern) {
-      setNumberText(bestPattern);
+    if (ocrPattern) {
+      setNumberText(ocrPattern);
       closePhotoPanel();
 
-      const unknownCount = (bestPattern.match(/\?/g) || []).length;
+      const unknownCount = (ocrPattern.match(/\?/g) || []).length;
 
       if (unknownCount <= 2) {
         generateCandidates({ closePanels: true, fromPhoto: true });
         showToast(
           unknownCount
-            ? `Found the 22-digit line with ${unknownCount} unreadable digit${unknownCount === 1 ? "" : "s"}`
-            : "22-digit number read from the label"
+            ? `Found the postal number with ${unknownCount} unreadable digit${unknownCount === 1 ? "" : "s"}`
+            : "Postal number read from the label"
         );
       } else {
         openNumberPanel({ historyMode: "replace" });
@@ -877,9 +859,9 @@ function generateCandidates(options = {}) {
     return;
   }
 
-  if (pattern.length !== MAX_BARCODE_LENGTH) {
+  if (!isAllowedBarcodeLength(pattern.length)) {
     showToast(
-      `Enter all ${MAX_BARCODE_LENGTH} digits. Use ? for an unreadable digit.`
+      "Enter exactly 22, 24, or 26 digits. Use ? for an unreadable digit."
     );
     openNumberPanel();
     return;
@@ -937,8 +919,14 @@ function renderResults() {
     const card = document.createElement("article");
     card.className = "barcode-card";
 
-    const barcodeDisplay = document.createElement("div");
-    barcodeDisplay.className = "barcode-static";
+    const barcodeTap = document.createElement("button");
+    barcodeTap.type = "button";
+    barcodeTap.className = "barcode-tap";
+    barcodeTap.setAttribute(
+      "aria-label",
+      `Open barcode ${groupNumber(value)} in landscape full screen`
+    );
+    barcodeTap.addEventListener("click", () => openFullscreen(index));
 
     const barcodeWrap = document.createElement("div");
     barcodeWrap.className = "barcode-wrap";
@@ -950,7 +938,7 @@ function renderResults() {
     number.className = "candidate-number";
     number.textContent = groupNumber(value);
 
-    barcodeDisplay.append(barcodeWrap, number);
+    barcodeTap.append(barcodeWrap, number);
 
     const actions = document.createElement("div");
     actions.className = "card-actions";
@@ -968,7 +956,7 @@ function renderResults() {
     downloadButton.addEventListener("click", () => downloadBarcode(value));
 
     actions.append(shareButton, downloadButton);
-    card.append(barcodeDisplay, actions);
+    card.append(barcodeTap, actions);
     elements.results.appendChild(card);
 
     try {
@@ -978,6 +966,77 @@ function renderResults() {
         error?.message || "The barcode could not be drawn.";
     }
   });
+}
+
+function shouldUseRotatedFallback() {
+  return window.innerHeight > window.innerWidth;
+}
+
+function applyFullscreenOrientation() {
+  elements.fullscreenModal.classList.toggle(
+    "force-landscape",
+    shouldUseRotatedFallback()
+  );
+}
+
+function openFullscreen(index, options = {}) {
+  const { historyMode = "push" } = options;
+
+  fullscreenIndex = Math.max(0, Math.min(candidates.length - 1, index));
+  elements.fullscreenModal.hidden = false;
+  document.body.style.overflow = "hidden";
+  applyFullscreenOrientation();
+  renderFullscreen();
+
+  if (historyMode === "push") {
+    setHistoryView("fullscreen");
+  } else if (historyMode === "replace") {
+    setHistoryView("fullscreen", { replace: true });
+  }
+
+  window.setTimeout(() => {
+    applyFullscreenOrientation();
+    renderFullscreen();
+  }, 120);
+}
+
+function closeFullscreenDirectly() {
+  if (isClosingFullscreen) {
+    return;
+  }
+
+  isClosingFullscreen = true;
+  elements.fullscreenModal.classList.remove("force-landscape");
+  elements.fullscreenModal.hidden = true;
+  document.body.style.overflow = "";
+  isClosingFullscreen = false;
+}
+
+function closeFullscreen() {
+  closeHistoryView("fullscreen", closeFullscreenDirectly);
+}
+
+function renderFullscreen() {
+  const value = candidates[fullscreenIndex];
+
+  if (!value) {
+    closeFullscreen();
+    return;
+  }
+
+  drawBarcode(elements.fullscreenCanvas, value, true);
+  elements.fullscreenNumber.textContent = groupNumber(value);
+
+  const multiple = candidates.length > 1;
+  elements.fullscreenNavigation.hidden = !multiple;
+
+  if (multiple) {
+    elements.fullscreenPosition.textContent =
+      `${fullscreenIndex + 1} of ${candidates.length}`;
+    elements.previousCandidateButton.disabled = fullscreenIndex <= 0;
+    elements.nextCandidateButton.disabled =
+      fullscreenIndex >= candidates.length - 1;
+  }
 }
 
 function createExportCanvas(value) {
@@ -1075,6 +1134,12 @@ function downloadBlob(blob, filename) {
 }
 
 elements.takePhotoButton.addEventListener("click", () => {
+  // Warm the OCR engine while the camera is open. This removes much of the
+  // waiting after the picture is taken, especially on the first scan.
+  void getOcrWorker().catch((error) => {
+    console.warn("The OCR reader could not be preloaded.", error);
+  });
+
   elements.cameraInput.click();
 });
 
@@ -1087,9 +1152,7 @@ elements.openNumberButton.addEventListener("click", () => {
 });
 
 elements.currentNumberValue.addEventListener("click", () => {
-  if (numberText) {
-    openNumberPanel();
-  }
+  openNumberPanel();
 });
 
 elements.currentNumberClearButton.addEventListener("click", (event) => {
@@ -1103,6 +1166,7 @@ elements.closeNumberButton.addEventListener("click", () => {
 elements.cancelPhotoButton.addEventListener("click", () => {
   closeHistoryView("photo", closePhotoPanel);
 });
+elements.clearButton.addEventListener("click", clearEverything);
 elements.generateButton.addEventListener("click", () => {
   generateCandidates({ closePanels: true });
 });
@@ -1129,13 +1193,49 @@ elements.numberDisplay.addEventListener("click", (event) => {
   renderNumberDisplay();
 });
 
+elements.closeFullscreenButton.addEventListener("click", () => {
+  closeFullscreen();
+});
+
+elements.previousCandidateButton.addEventListener("click", () => {
+  if (fullscreenIndex > 0) {
+    fullscreenIndex -= 1;
+    renderFullscreen();
+  }
+});
+
+elements.nextCandidateButton.addEventListener("click", () => {
+  if (fullscreenIndex < candidates.length - 1) {
+    fullscreenIndex += 1;
+    renderFullscreen();
+  }
+});
+
+window.addEventListener("resize", () => {
+  if (!elements.fullscreenModal.hidden && candidates.length) {
+    applyFullscreenOrientation();
+    renderFullscreen();
+  }
+});
+
+window.addEventListener("orientationchange", () => {
+  window.setTimeout(() => {
+    if (!elements.fullscreenModal.hidden && candidates.length) {
+      applyFullscreenOrientation();
+      renderFullscreen();
+    }
+  }, 180);
+});
+
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") {
     return;
   }
 
-  if (!elements.numberPanel.hidden) {
+  if (!elements.fullscreenModal.hidden) {
+    closeFullscreen();
+  } else if (!elements.numberPanel.hidden) {
     closeHistoryView("number", closeNumberPanel);
   } else if (!elements.photoPanel.hidden) {
     closeHistoryView("photo", closePhotoPanel);
@@ -1144,6 +1244,14 @@ document.addEventListener("keydown", (event) => {
 
 window.addEventListener("popstate", () => {
   closeAllTransientViewsDirectly();
+});
+
+window.addEventListener("pagehide", () => {
+  if (ocrWorker) {
+    void ocrWorker.terminate().catch(() => {});
+    ocrWorker = null;
+    ocrWorkerPromise = null;
+  }
 });
 
 if ("serviceWorker" in navigator) {

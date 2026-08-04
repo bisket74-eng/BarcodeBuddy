@@ -81,29 +81,21 @@
         <div id="numberDisplay" class="number-display empty" aria-live="polite">
           Enter numbers below
         </div>
+
+        <button id="clearButton" class="clear-button" type="button">
+          Clear
+        </button>
       </div>
 
       <p class="helper">
-        Enter exactly <strong>22 digits</strong>. Use <strong>?</strong> for an
+        Enter exactly <strong>22, 24, or 26 digits</strong>. Use <strong>?</strong> for an
         unreadable digit; one question mark creates ten possible barcodes.
       </p>
 
-      <div class="cursor-controls" aria-label="Edit barcode number">
-        <button class="cursor-control" type="button" data-key="left" aria-label="Move cursor left">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5 7.5 12l7 7"/></svg>
-          <span>Left</span>
-        </button>
-        <button class="cursor-control" type="button" data-key="right" aria-label="Move cursor right">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 5 7 7-7 7"/></svg>
-          <span>Right</span>
-        </button>
-        <button class="cursor-control delete-control" type="button" data-key="backspace" aria-label="Delete digit before cursor">
-          <svg viewBox="0 0 28 24" aria-hidden="true">
-            <path d="M10 4h12.5A2.5 2.5 0 0 1 25 6.5v11a2.5 2.5 0 0 1-2.5 2.5H10L3 12l7-8Z"/>
-            <path d="m14 8 6 8M20 8l-6 8"/>
-          </svg>
-          <span>Delete</span>
-        </button>
+      <div class="cursor-controls">
+        <button type="button" data-key="left" aria-label="Move cursor left">←</button>
+        <button type="button" data-key="right" aria-label="Move cursor right">→</button>
+        <button type="button" data-key="backspace" aria-label="Backspace">⌫</button>
       </div>
 
       <div class="ten-key" aria-label="Ten-key number pad">
@@ -163,6 +155,29 @@
     </aside>
   </main>
 
+  <div id="fullscreenModal" class="fullscreen-modal" hidden>
+    <div class="fullscreen-surface">
+      <button
+        id="closeFullscreenButton"
+        class="fullscreen-close"
+        type="button"
+        aria-label="Close full-screen barcode"
+      >
+        ×
+      </button>
+
+      <div class="fullscreen-stage">
+        <canvas id="fullscreenCanvas"></canvas>
+        <div id="fullscreenNumber" class="fullscreen-number"></div>
+      </div>
+
+      <div id="fullscreenNavigation" class="fullscreen-navigation" hidden>
+        <button id="previousCandidateButton" type="button">Previous</button>
+        <span id="fullscreenPosition"></span>
+        <button id="nextCandidateButton" type="button">Next</button>
+      </div>
+    </div>
+  </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 </body>
