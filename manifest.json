@@ -1,0 +1,25 @@
+{
+  "name": "Postal Barcode Rescue",
+  "short_name": "Barcode Rescue",
+  "description": "Recover an existing package tracking barcode from a photo or tracking number.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f2ff",
+  "theme_color": "#21133f",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
