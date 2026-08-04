@@ -173,26 +173,26 @@ button:focus-visible {
 }
 
 .number-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
+  display: block;
+  width: 100%;
   margin-top: 12px;
 }
 
 .number-display {
   display: flex;
   align-items: center;
-  min-height: 74px;
-  padding: 14px 15px;
+  width: 100%;
+  min-height: 58px;
+  padding: 9px 12px;
   border: 2px solid rgba(0,103,169,0.34);
-  border-radius: 15px;
+  border-radius: 14px;
   color: var(--ink);
   overflow-x: auto;
   background: #fff;
   white-space: nowrap;
-  font-size: clamp(1.06rem, 5.15vw, 1.32rem);
+  font-size: clamp(1rem, 4.8vw, 1.24rem);
   font-weight: 850;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.055em;
 }
 
 .number-display.empty {
@@ -226,30 +226,6 @@ button:focus-visible {
   50% { opacity: 0; }
 }
 
-.clear-button {
-  display: grid;
-  place-items: center;
-  align-content: center;
-  gap: 1px;
-  min-width: 88px;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: 15px;
-  color: #fff;
-  background: linear-gradient(145deg, #b93443, #d84b5c);
-  box-shadow: 0 7px 16px rgba(198, 63, 79, 0.25);
-  cursor: pointer;
-  font-size: 0.76rem;
-  line-height: 1.05;
-  font-weight: 900;
-  text-transform: uppercase;
-  letter-spacing: 0.035em;
-}
-
-.clear-button span:first-child {
-  font-size: 1.28rem;
-  line-height: 0.9;
-}
 
 .helper {
   margin: 9px 2px 12px;
@@ -383,16 +359,16 @@ button:focus-visible {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 7px;
+  gap: 10px;
   width: 100%;
-  min-height: 38px;
-  margin: 0 0 14px;
-  padding: 4px 5px 4px 10px;
-  border: 1px solid rgba(0,103,169,0.18);
-  border-radius: 11px;
+  min-height: 52px;
+  margin: 0 0 16px;
+  padding: 7px 7px 7px 13px;
+  border: 1px solid rgba(0,103,169,0.22);
+  border-radius: 14px;
   color: var(--ink);
-  background: rgba(255,255,255,0.78);
-  box-shadow: 0 4px 12px rgba(0, 53, 96, 0.07);
+  background: rgba(255,255,255,0.90);
+  box-shadow: 0 6px 16px rgba(0, 53, 96, 0.10);
 }
 
 .current-number-strip[hidden] {
@@ -401,16 +377,17 @@ button:focus-visible {
 
 .current-number-value {
   min-width: 0;
-  padding: 5px 2px;
+  min-height: 38px;
+  padding: 7px 2px;
   overflow-x: auto;
   border: 0;
   color: var(--ink);
   background: transparent;
   white-space: nowrap;
   text-align: left;
-  font-size: clamp(0.74rem, 3.25vw, 0.89rem);
+  font-size: clamp(0.82rem, 3.55vw, 1rem);
   font-weight: 900;
-  letter-spacing: 0.035em;
+  letter-spacing: 0.04em;
   scrollbar-width: none;
 }
 
@@ -418,15 +395,27 @@ button:focus-visible {
   display: none;
 }
 
+.current-number-value:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.current-number-value.results-summary {
+  color: var(--navy);
+  letter-spacing: 0.01em;
+}
+
 .current-number-clear {
-  min-height: 30px;
-  padding: 5px 9px;
-  border: 0;
-  border-radius: 8px;
-  color: var(--danger);
+  min-width: 76px;
+  min-height: 40px;
+  padding: 8px 13px;
+  border: 1px solid rgba(198, 63, 79, 0.20);
+  border-radius: 11px;
+  color: #b93443;
   background: #fff0f2;
+  box-shadow: 0 4px 10px rgba(198, 63, 79, 0.12);
   cursor: pointer;
-  font-size: 0.72rem;
+  font-size: 0.84rem;
   font-weight: 900;
 }
 
@@ -478,7 +467,7 @@ body.input-open .notice {
   box-shadow: var(--small-shadow);
 }
 
-.barcode-tap {
+.barcode-static {
   display: block;
   width: 100%;
   padding: 0;
@@ -487,7 +476,6 @@ body.input-open .notice {
   overflow: hidden;
   color: var(--ink);
   background: #fff;
-  cursor: pointer;
 }
 
 .barcode-wrap {

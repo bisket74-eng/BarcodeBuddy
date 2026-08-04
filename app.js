@@ -19,7 +19,6 @@ const elements = {
   numberPanel: document.getElementById("numberPanel"),
   closeNumberButton: document.getElementById("closeNumberButton"),
   numberDisplay: document.getElementById("numberDisplay"),
-  clearButton: document.getElementById("clearButton"),
   generateButton: document.getElementById("generateButton"),
   currentNumberStrip: document.getElementById("currentNumberStrip"),
   currentNumberValue: document.getElementById("currentNumberValue"),
@@ -28,31 +27,15 @@ const elements = {
   notice: document.getElementById("notice"),
   results: document.getElementById("results"),
   resultCount: document.getElementById("resultCount"),
-  foundListModal: document.getElementById("foundListModal"),
-  foundList: document.getElementById("foundList"),
-  foundListCount: document.getElementById("foundListCount"),
-  closeFoundListButton: document.getElementById("closeFoundListButton"),
-  fullscreenModal: document.getElementById("fullscreenModal"),
-  closeFullscreenButton: document.getElementById("closeFullscreenButton"),
-  fullscreenCanvas: document.getElementById("fullscreenCanvas"),
-  fullscreenNumber: document.getElementById("fullscreenNumber"),
-  fullscreenNavigation: document.getElementById("fullscreenNavigation"),
-  previousCandidateButton: document.getElementById("previousCandidateButton"),
-  nextCandidateButton: document.getElementById("nextCandidateButton"),
-  fullscreenPosition: document.getElementById("fullscreenPosition"),
   toast: document.getElementById("toast")
 };
 
 let numberText = "";
 let keypadCaret = 0;
 let candidates = [];
-let fullscreenIndex = 0;
 let currentPhotoUrl = "";
 let toastTimer = 0;
-let isClosingFullscreen = false;
 let foundBarcodes = [];
-let viewedFoundBarcodes = new Set();
-let fullscreenReturnView = "main";
 
 const HISTORY_VIEW_KEY = "barcodeBuddyView";
 
@@ -105,9 +88,6 @@ function closeInputHistoryIfOpen() {
 function closeAllTransientViewsDirectly() {
   elements.numberPanel.hidden = true;
   elements.photoPanel.hidden = true;
-  elements.foundListModal.hidden = true;
-  elements.fullscreenModal.hidden = true;
-  elements.fullscreenModal.classList.remove("force-landscape");
   document.body.style.overflow = "";
   updateInputOpenState();
 }
@@ -125,16 +105,41 @@ function sanitizeEditableNumber(value) {
 }
 
 function updateCurrentNumberStrip() {
-  const hasNumber = Boolean(numberText);
-  elements.currentNumberStrip.hidden = !hasNumber;
+  const hasEditableNumber = Boolean(numberText);
+  const hasResults = candidates.length > 0;
+  const hasContent = hasEditableNumber || hasResults;
 
-  if (hasNumber) {
-    elements.currentNumberValue.textContent = groupNumber(numberText);
+  elements.currentNumberStrip.hidden = !hasContent;
 
-    window.requestAnimationFrame(() => {
-      elements.currentNumberValue.scrollLeft = 0;
-    });
+  if (!hasContent) {
+    elements.currentNumberValue.textContent = "";
+    elements.currentNumberValue.disabled = false;
+    elements.currentNumberValue.classList.remove("results-summary");
+    return;
   }
+
+  if (hasEditableNumber) {
+    elements.currentNumberValue.textContent = groupNumber(numberText);
+    elements.currentNumberValue.disabled = false;
+    elements.currentNumberValue.classList.remove("results-summary");
+    elements.currentNumberValue.setAttribute(
+      "aria-label",
+      "Edit the current barcode number"
+    );
+  } else {
+    elements.currentNumberValue.textContent =
+      `${candidates.length} barcode${candidates.length === 1 ? "" : "s"} from photo`;
+    elements.currentNumberValue.disabled = true;
+    elements.currentNumberValue.classList.add("results-summary");
+    elements.currentNumberValue.setAttribute(
+      "aria-label",
+      `${candidates.length} barcode${candidates.length === 1 ? "" : "s"} from photo`
+    );
+  }
+
+  window.requestAnimationFrame(() => {
+    elements.currentNumberValue.scrollLeft = 0;
+  });
 }
 
 function renderNumberDisplay() {
@@ -328,12 +333,12 @@ function closePhotoPanel() {
 }
 
 function clearEverything() {
-  setNumberText("");
+  numberText = "";
   keypadCaret = 0;
   candidates = [];
   foundBarcodes = [];
-  viewedFoundBarcodes = new Set();
-  closeFoundListDirectly();
+  renderNumberDisplay();
+  updateCurrentNumberStrip();
   renderResults();
   closePhotoPanel();
   showToast("Cleared");
@@ -654,100 +659,45 @@ async function runOcr(image) {
   return patterns[0] || "";
 }
 
-function renderFoundList() {
-  elements.foundList.innerHTML = "";
-  elements.foundListCount.textContent = String(foundBarcodes.length);
-
-  foundBarcodes.forEach((value, index) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "found-list-item";
-
-    if (viewedFoundBarcodes.has(value)) {
-      button.classList.add("previously-opened");
-    }
-
-    const number = document.createElement("span");
-    number.className = "found-list-number";
-    number.textContent = groupNumber(value);
-
-    const action = document.createElement("span");
-    action.className = "found-list-action";
-    action.textContent = "Open";
-
-    button.append(number, action);
-    button.addEventListener("click", () => {
-      viewedFoundBarcodes.add(value);
-      renderFoundList();
-      openFullscreen(index, {
-        historyMode: "push",
-        forcePush: true,
-        returnView: "found-list"
-      });
-    });
-
-    elements.foundList.appendChild(button);
-  });
-}
-
-function openFoundList(options = {}) {
-  const { historyMode = "push" } = options;
-
-  if (!foundBarcodes.length) {
-    return;
-  }
-
-  renderFoundList();
-  elements.foundListModal.hidden = false;
-  document.body.style.overflow = "hidden";
-
-  if (historyMode === "replace") {
-    setHistoryView("found-list", { replace: true });
-  } else if (historyMode === "push") {
-    setHistoryView("found-list");
-  }
-}
-
-function closeFoundListDirectly() {
-  elements.foundListModal.hidden = true;
-
-  if (elements.fullscreenModal.hidden) {
-    document.body.style.overflow = "";
-  }
-}
-
-function closeFoundList() {
-  closeHistoryView("found-list", closeFoundListDirectly);
-}
-
-function showDetectedBarcodes(values, options = {}) {
-  const { historyMode = "replace" } = options;
+function showDetectedBarcodes(values) {
   foundBarcodes = uniqueValues(
     values
       .map((value) => sanitizeEditableNumber(value))
       .filter((value) => /^\d{22}$/.test(value))
   );
-  viewedFoundBarcodes = new Set();
 
   if (!foundBarcodes.length) {
     return false;
   }
 
   candidates = [...foundBarcodes];
-  renderResults();
-  closePhotoPanel();
 
   if (foundBarcodes.length === 1) {
-    setNumberText(foundBarcodes[0]);
+    numberText = foundBarcodes[0];
     keypadCaret = numberText.length;
-    generateCandidates({ closePanels: true, fromPhoto: true });
-    showToast("Barcode read from photo");
-    return true;
+  } else {
+    numberText = "";
+    keypadCaret = 0;
   }
 
-  setNumberText("");
-  openFoundList({ historyMode });
-  showToast(`${foundBarcodes.length} barcodes found`);
+  closePhotoPanel();
+  renderNumberDisplay();
+  updateCurrentNumberStrip();
+  renderResults();
+  closeInputHistoryIfOpen();
+
+  window.setTimeout(() => {
+    elements.currentNumberStrip.scrollIntoView({
+      behavior: "smooth",
+      block: "start"
+    });
+  }, 80);
+
+  showToast(
+    foundBarcodes.length === 1
+      ? "Barcode read from photo"
+      : `${foundBarcodes.length} barcodes found`
+  );
   return true;
 }
 
@@ -757,12 +707,12 @@ async function processPhoto(file) {
   }
 
   // A new photo must never reuse the previous label's number or list.
-  setNumberText("");
+  numberText = "";
   keypadCaret = 0;
   candidates = [];
   foundBarcodes = [];
-  viewedFoundBarcodes = new Set();
-  closeFoundListDirectly();
+  renderNumberDisplay();
+  updateCurrentNumberStrip();
   renderResults();
 
   const replaceExistingView = Boolean(getHistoryView());
@@ -799,7 +749,7 @@ async function processPhoto(file) {
     );
 
     if (decodedNumbers.length > 1) {
-      showDetectedBarcodes(decodedNumbers, { historyMode: "replace" });
+      showDetectedBarcodes(decodedNumbers);
       return;
     }
 
@@ -818,7 +768,7 @@ async function processPhoto(file) {
     ]);
 
     if (allExactNumbers.length) {
-      showDetectedBarcodes(allExactNumbers, { historyMode: "replace" });
+      showDetectedBarcodes(allExactNumbers);
       return;
     }
 
@@ -987,14 +937,8 @@ function renderResults() {
     const card = document.createElement("article");
     card.className = "barcode-card";
 
-    const barcodeTap = document.createElement("button");
-    barcodeTap.type = "button";
-    barcodeTap.className = "barcode-tap";
-    barcodeTap.setAttribute(
-      "aria-label",
-      `Open barcode ${groupNumber(value)} in landscape full screen`
-    );
-    barcodeTap.addEventListener("click", () => openFullscreen(index));
+    const barcodeDisplay = document.createElement("div");
+    barcodeDisplay.className = "barcode-static";
 
     const barcodeWrap = document.createElement("div");
     barcodeWrap.className = "barcode-wrap";
@@ -1006,7 +950,7 @@ function renderResults() {
     number.className = "candidate-number";
     number.textContent = groupNumber(value);
 
-    barcodeTap.append(barcodeWrap, number);
+    barcodeDisplay.append(barcodeWrap, number);
 
     const actions = document.createElement("div");
     actions.className = "card-actions";
@@ -1024,7 +968,7 @@ function renderResults() {
     downloadButton.addEventListener("click", () => downloadBarcode(value));
 
     actions.append(shareButton, downloadButton);
-    card.append(barcodeTap, actions);
+    card.append(barcodeDisplay, actions);
     elements.results.appendChild(card);
 
     try {
@@ -1034,91 +978,6 @@ function renderResults() {
         error?.message || "The barcode could not be drawn.";
     }
   });
-}
-
-function shouldUseRotatedFallback() {
-  return window.innerHeight > window.innerWidth;
-}
-
-function applyFullscreenOrientation() {
-  elements.fullscreenModal.classList.toggle(
-    "force-landscape",
-    shouldUseRotatedFallback()
-  );
-}
-
-function openFullscreen(index, options = {}) {
-  const {
-    historyMode = "push",
-    forcePush = false,
-    returnView = "main"
-  } = options;
-
-  fullscreenReturnView = returnView;
-  fullscreenIndex = Math.max(0, Math.min(candidates.length - 1, index));
-  elements.fullscreenModal.hidden = false;
-  document.body.style.overflow = "hidden";
-  applyFullscreenOrientation();
-  renderFullscreen();
-
-  if (historyMode === "push") {
-    setHistoryView("fullscreen", { forcePush });
-  } else if (historyMode === "replace") {
-    setHistoryView("fullscreen", { replace: true });
-  }
-
-  window.setTimeout(() => {
-    applyFullscreenOrientation();
-    renderFullscreen();
-  }, 120);
-}
-
-function closeFullscreenDirectly() {
-  if (isClosingFullscreen) {
-    return;
-  }
-
-  isClosingFullscreen = true;
-  elements.fullscreenModal.classList.remove("force-landscape");
-  elements.fullscreenModal.hidden = true;
-  document.body.style.overflow =
-    fullscreenReturnView === "found-list" &&
-    !elements.foundListModal.hidden
-      ? "hidden"
-      : "";
-  isClosingFullscreen = false;
-}
-
-function closeFullscreen() {
-  closeHistoryView("fullscreen", closeFullscreenDirectly);
-}
-
-function renderFullscreen() {
-  const value = candidates[fullscreenIndex];
-
-  if (!value) {
-    closeFullscreen();
-    return;
-  }
-
-  if (fullscreenReturnView === "found-list") {
-    viewedFoundBarcodes.add(value);
-    renderFoundList();
-  }
-
-  drawBarcode(elements.fullscreenCanvas, value, true);
-  elements.fullscreenNumber.textContent = groupNumber(value);
-
-  const multiple = candidates.length > 1;
-  elements.fullscreenNavigation.hidden = !multiple;
-
-  if (multiple) {
-    elements.fullscreenPosition.textContent =
-      `${fullscreenIndex + 1} of ${candidates.length}`;
-    elements.previousCandidateButton.disabled = fullscreenIndex <= 0;
-    elements.nextCandidateButton.disabled =
-      fullscreenIndex >= candidates.length - 1;
-  }
 }
 
 function createExportCanvas(value) {
@@ -1228,7 +1087,9 @@ elements.openNumberButton.addEventListener("click", () => {
 });
 
 elements.currentNumberValue.addEventListener("click", () => {
-  openNumberPanel();
+  if (numberText) {
+    openNumberPanel();
+  }
 });
 
 elements.currentNumberClearButton.addEventListener("click", (event) => {
@@ -1242,7 +1103,6 @@ elements.closeNumberButton.addEventListener("click", () => {
 elements.cancelPhotoButton.addEventListener("click", () => {
   closeHistoryView("photo", closePhotoPanel);
 });
-elements.clearButton.addEventListener("click", clearEverything);
 elements.generateButton.addEventListener("click", () => {
   generateCandidates({ closePanels: true });
 });
@@ -1269,70 +1129,21 @@ elements.numberDisplay.addEventListener("click", (event) => {
   renderNumberDisplay();
 });
 
-elements.closeFoundListButton.addEventListener("click", () => {
-  closeFoundList();
-});
-
-elements.closeFullscreenButton.addEventListener("click", () => {
-  closeFullscreen();
-});
-
-elements.previousCandidateButton.addEventListener("click", () => {
-  if (fullscreenIndex > 0) {
-    fullscreenIndex -= 1;
-    renderFullscreen();
-  }
-});
-
-elements.nextCandidateButton.addEventListener("click", () => {
-  if (fullscreenIndex < candidates.length - 1) {
-    fullscreenIndex += 1;
-    renderFullscreen();
-  }
-});
-
-window.addEventListener("resize", () => {
-  if (!elements.fullscreenModal.hidden && candidates.length) {
-    applyFullscreenOrientation();
-    renderFullscreen();
-  }
-});
-
-window.addEventListener("orientationchange", () => {
-  window.setTimeout(() => {
-    if (!elements.fullscreenModal.hidden && candidates.length) {
-      applyFullscreenOrientation();
-      renderFullscreen();
-    }
-  }, 180);
-});
-
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") {
     return;
   }
 
-  if (!elements.fullscreenModal.hidden) {
-    closeFullscreen();
-  } else if (!elements.foundListModal.hidden) {
-    closeFoundList();
-  } else if (!elements.numberPanel.hidden) {
+  if (!elements.numberPanel.hidden) {
     closeHistoryView("number", closeNumberPanel);
   } else if (!elements.photoPanel.hidden) {
     closeHistoryView("photo", closePhotoPanel);
   }
 });
 
-window.addEventListener("popstate", (event) => {
-  const view = event.state?.[HISTORY_VIEW_KEY] || "";
+window.addEventListener("popstate", () => {
   closeAllTransientViewsDirectly();
-
-  if (view === "found-list" && foundBarcodes.length) {
-    renderFoundList();
-    elements.foundListModal.hidden = false;
-    document.body.style.overflow = "hidden";
-  }
 });
 
 if ("serviceWorker" in navigator) {
