@@ -1,7 +1,10 @@
 const ZXING_URL =
   "https://cdn.jsdelivr.net/npm/@zxing/browser@0.2.0/+esm";
+const ZXING_LIBRARY_URL =
+  "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/+esm";
 
-const MAX_BARCODE_LENGTH = 18;
+const MAX_BARCODE_LENGTH = 22;
+const EXPECTED_GROUP_LENGTHS = [4, 4, 4, 4, 4, 2];
 
 const elements = {
   takePhotoButton: document.getElementById("takePhotoButton"),
@@ -42,9 +45,9 @@ let candidates = [];
 let fullscreenIndex = 0;
 let currentPhotoUrl = "";
 let toastTimer = 0;
-let openedNativeFullscreen = false;
-let orientationLocked = false;
 let isClosingFullscreen = false;
+
+const HISTORY_VIEW_KEY = "barcodeBuddyView";
 
 function showToast(message) {
   window.clearTimeout(toastTimer);
@@ -54,6 +57,49 @@ function showToast(message) {
   toastTimer = window.setTimeout(() => {
     elements.toast.classList.remove("show");
   }, 2400);
+}
+
+function getHistoryView() {
+  return history.state?.[HISTORY_VIEW_KEY] || "";
+}
+
+function setHistoryView(view, options = {}) {
+  const { replace = false } = options;
+  const state = {
+    ...(history.state || {}),
+    [HISTORY_VIEW_KEY]: view
+  };
+
+  if (replace || getHistoryView()) {
+    history.replaceState(state, "", window.location.href);
+  } else {
+    history.pushState(state, "", window.location.href);
+  }
+}
+
+function closeHistoryView(view, closeDirectly) {
+  closeDirectly();
+
+  if (getHistoryView() === view) {
+    history.back();
+  }
+}
+
+function closeInputHistoryIfOpen() {
+  const view = getHistoryView();
+
+  if (view === "number" || view === "photo") {
+    history.back();
+  }
+}
+
+function closeAllTransientViewsDirectly() {
+  elements.numberPanel.hidden = true;
+  elements.photoPanel.hidden = true;
+  elements.fullscreenModal.hidden = true;
+  elements.fullscreenModal.classList.remove("force-landscape");
+  document.body.style.overflow = "";
+  updateInputOpenState();
 }
 
 function groupNumber(value) {
@@ -141,12 +187,20 @@ function closeInputPanels() {
   updateInputOpenState();
 }
 
-function openNumberPanel() {
+function openNumberPanel(options = {}) {
+  const { historyMode = "push" } = options;
+
   elements.photoPanel.hidden = true;
   elements.numberPanel.hidden = false;
   updateInputOpenState();
   keypadCaret = numberText.length;
   renderNumberDisplay();
+
+  if (historyMode === "push") {
+    setHistoryView("number");
+  } else if (historyMode === "replace") {
+    setHistoryView("number", { replace: true });
+  }
 
   window.setTimeout(() => {
     elements.numberPanel.scrollIntoView({
@@ -163,7 +217,7 @@ function closeNumberPanel() {
 
 function insertAtCaret(character) {
   if (numberText.length >= MAX_BARCODE_LENGTH) {
-    showToast("Barcode numbers are limited to 18 digits");
+    showToast(`Barcode numbers are limited to ${MAX_BARCODE_LENGTH} digits`);
     return;
   }
 
@@ -258,50 +312,124 @@ function clearEverything() {
 }
 
 function extractDecodedDigits(text) {
-  const cleaned = String(text || "").replace(/\u001d/g, "");
-  const digitRuns = cleaned.match(/\d+/g) || [];
+  const raw = String(text || "").replace(/\u001d/g, "|");
+  const exactRuns = raw.match(/\d{22}/g) || [];
 
-  const exact = digitRuns.find(
+  if (exactRuns.length === 1) {
+    return exactRuns[0];
+  }
+
+  const separatedRuns = raw
+    .split("|")
+    .map((part) => part.replace(/\D/g, ""))
+    .filter(Boolean);
+
+  const exactSeparated = separatedRuns.find(
     (run) => run.length === MAX_BARCODE_LENGTH
   );
 
-  if (exact) {
-    return exact;
+  if (exactSeparated) {
+    return exactSeparated;
   }
 
-  const combined = cleaned.replace(/\D/g, "");
+  // Some GS1-128 results contain routing data first and the 22-digit
+  // tracking number as the final section. Only use that when a GS separator
+  // was actually present; never take the first 22 digits of unrelated data.
+  if (raw.includes("|")) {
+    const finalRun = separatedRuns.at(-1) || "";
 
-  if (combined.length >= MAX_BARCODE_LENGTH) {
-    return combined.slice(0, MAX_BARCODE_LENGTH);
+    if (finalRun.length >= MAX_BARCODE_LENGTH) {
+      return finalRun.slice(-MAX_BARCODE_LENGTH);
+    }
   }
 
   return "";
 }
 
-function extractBestOcrNumber(text) {
-  const normalized = String(text || "")
-    .replace(/[Oo]/g, "0")
-    .replace(/[Il|]/g, "1");
+function normalizeOcrCharacter(character) {
+  const map = {
+    O: "0", o: "0", Q: "0", D: "0",
+    I: "1", l: "1", i: "1", "|": "1", "!": "1",
+    Z: "2", z: "2",
+    S: "5", s: "5",
+    G: "6", g: "6",
+    B: "8", b: "8"
+  };
 
-  const runs = normalized.match(/\d[\d\s-]{6,60}\d/g) || [];
-  const found = runs
-    .map((run) => run.replace(/\D/g, ""))
-    .filter((run) => run.length >= MAX_BARCODE_LENGTH)
-    .map((run) => run.slice(0, MAX_BARCODE_LENGTH));
-
-  const exact = found.find(
-    (run) => run.length === MAX_BARCODE_LENGTH
-  );
-
-  if (exact) {
-    return exact;
+  if (/\d/.test(character)) {
+    return character;
   }
 
-  const allDigits = normalized.replace(/\D/g, "");
+  return map[character] || "?";
+}
 
-  return allDigits.length >= MAX_BARCODE_LENGTH
-    ? allDigits.slice(0, MAX_BARCODE_LENGTH)
-    : "";
+function normalizeOcrGroup(group) {
+  return String(group || "")
+    .split("")
+    .filter((character) => !/[-_.]/.test(character))
+    .map(normalizeOcrCharacter)
+    .join("");
+}
+
+function patternFromOcrLine(line) {
+  const trimmed = String(line || "").trim();
+
+  if (!trimmed) {
+    return "";
+  }
+
+  // Reject ordinary address/text lines. Only common OCR digit confusions,
+  // digits, spaces, and separators are allowed.
+  if (/[^0-9OoQDIil|!ZSsGgBb\s\-_.]/.test(trimmed)) {
+    return "";
+  }
+
+  const groups = trimmed
+    .split(/\s+/)
+    .map(normalizeOcrGroup)
+    .filter(Boolean);
+
+  if (groups.length === EXPECTED_GROUP_LENGTHS.length) {
+    const rebuilt = groups.map((group, index) => {
+      const expected = EXPECTED_GROUP_LENGTHS[index];
+
+      if (group.length > expected || group.length < expected - 1) {
+        return "";
+      }
+
+      return group.padEnd(expected, "?");
+    });
+
+    if (rebuilt.every(Boolean)) {
+      return rebuilt.join("");
+    }
+  }
+
+  const compact = normalizeOcrGroup(trimmed.replace(/\s+/g, ""));
+
+  if (compact.length === MAX_BARCODE_LENGTH) {
+    return compact;
+  }
+
+  return "";
+}
+
+function extractBestOcrPattern(text) {
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const patterns = lines
+    .map(patternFromOcrLine)
+    .filter((pattern) => pattern.length === MAX_BARCODE_LENGTH)
+    .sort((a, b) => {
+      const unknownA = (a.match(/\?/g) || []).length;
+      const unknownB = (b.match(/\?/g) || []).length;
+      return unknownA - unknownB;
+    });
+
+  return patterns[0] || "";
 }
 
 async function decodeWithNativeDetector(image) {
@@ -330,12 +458,28 @@ async function decodeWithNativeDetector(image) {
 
 async function decodeWithZxing(image) {
   try {
-    const { BrowserMultiFormatReader } = await import(ZXING_URL);
-    const reader = new BrowserMultiFormatReader();
+    const [
+      { BrowserMultiFormatReader },
+      { BarcodeFormat, DecodeHintType }
+    ] = await Promise.all([
+      import(ZXING_URL),
+      import(ZXING_LIBRARY_URL)
+    ]);
+
+    const hints = new Map();
+    hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.CODE_128]);
+    hints.set(DecodeHintType.TRY_HARDER, true);
+
+    const reader = new BrowserMultiFormatReader(hints);
     const result = await reader.decodeFromImageElement(image);
-    return result?.getText?.() || String(result || "");
+
+    if (result?.getBarcodeFormat?.() !== BarcodeFormat.CODE_128) {
+      return "";
+    }
+
+    return result?.getText?.() || "";
   } catch (error) {
-    console.warn("ZXing could not decode this image.", error);
+    console.warn("ZXing could not decode the Code 128 barcode.", error);
     return "";
   }
 }
@@ -375,18 +519,48 @@ function makeOcrCanvas(image) {
   return canvas;
 }
 
+function makeOcrRegions(image) {
+  const full = makeOcrCanvas(image);
+  const regions = [full];
+  const starts = [0.34, 0.48, 0.62, 0.74];
+  const heights = [0.28, 0.24, 0.22, 0.20];
+
+  starts.forEach((start, index) => {
+    const y = Math.round(full.height * start);
+    const height = Math.min(
+      full.height - y,
+      Math.round(full.height * heights[index])
+    );
+
+    if (height < 35) {
+      return;
+    }
+
+    const crop = document.createElement("canvas");
+    crop.width = full.width;
+    crop.height = height;
+    crop.getContext("2d").drawImage(
+      full,
+      0, y, full.width, height,
+      0, 0, full.width, height
+    );
+    regions.push(crop);
+  });
+
+  return regions;
+}
+
 async function runOcr(image) {
   if (!window.Tesseract?.createWorker) {
     throw new Error("OCR could not load. Check the internet connection.");
   }
 
-  const ocrCanvas = makeOcrCanvas(image);
-
+  const regions = makeOcrRegions(image);
   const worker = await Tesseract.createWorker("eng", 1, {
     logger(message) {
       if (message.status === "recognizing text") {
         const percent = Math.round((message.progress || 0) * 100);
-        setPhotoStatus(`Reading printed numbers… ${percent}%`, percent);
+        setPhotoStatus(`Reading the 22-digit number… ${percent}%`, percent);
       } else {
         setPhotoStatus("Preparing number reader…", 8);
       }
@@ -395,12 +569,34 @@ async function runOcr(image) {
 
   try {
     await worker.setParameters({
-      tessedit_char_whitelist: "0123456789 -",
-      preserve_interword_spaces: "1"
+      tessedit_char_whitelist: "0123456789OoQDIil|!ZSsGgBb -_.",
+      preserve_interword_spaces: "1",
+      tessedit_pageseg_mode: "6"
     });
 
-    const result = await worker.recognize(ocrCanvas);
-    return result?.data?.text || "";
+    let bestPattern = "";
+
+    for (const region of regions) {
+      const result = await worker.recognize(region);
+      const pattern = extractBestOcrPattern(result?.data?.text || "");
+
+      if (!pattern) {
+        continue;
+      }
+
+      const currentUnknown = (bestPattern.match(/\?/g) || []).length;
+      const newUnknown = (pattern.match(/\?/g) || []).length;
+
+      if (!bestPattern || newUnknown < currentUnknown) {
+        bestPattern = pattern;
+      }
+
+      if (newUnknown === 0) {
+        break;
+      }
+    }
+
+    return bestPattern;
   } finally {
     await worker.terminate();
   }
@@ -411,7 +607,16 @@ async function processPhoto(file) {
     return;
   }
 
+  // A new photo must never reuse the previous label's number.
+  setNumberText("");
+  keypadCaret = 0;
+  candidates = [];
+  renderResults();
+
+  const replaceExistingView = Boolean(getHistoryView());
+
   closeNumberPanel();
+  setHistoryView("photo", { replace: replaceExistingView });
   releasePhotoUrl();
 
   currentPhotoUrl = URL.createObjectURL(file);
@@ -446,24 +651,36 @@ async function processPhoto(file) {
       18
     );
 
-    const ocrText = await runOcr(elements.photoPreview);
-    const ocrNumber = extractBestOcrNumber(ocrText);
+    const ocrPattern = await runOcr(elements.photoPreview);
 
-    if (ocrNumber) {
-      setNumberText(ocrNumber);
+    if (ocrPattern) {
+      setNumberText(ocrPattern);
       closePhotoPanel();
-      generateCandidates({ closePanels: true, fromPhoto: true });
-      showToast("Printed number read—tap the number line to correct it");
+
+      const unknownCount = (ocrPattern.match(/\?/g) || []).length;
+
+      if (unknownCount <= 2) {
+        generateCandidates({ closePanels: true, fromPhoto: true });
+        showToast(
+          unknownCount
+            ? `Found the 22-digit line with ${unknownCount} unreadable digit${unknownCount === 1 ? "" : "s"}`
+            : "22-digit number read from the label"
+        );
+      } else {
+        openNumberPanel({ historyMode: "replace" });
+        showToast("Some digits are unclear. Check the ? marks before creating.");
+      }
+
       return;
     }
 
     closePhotoPanel();
-    openNumberPanel();
+    openNumberPanel({ historyMode: "replace" });
     showToast("The photo could not be read. Enter the number below.");
   } catch (error) {
     console.error(error);
     closePhotoPanel();
-    openNumberPanel();
+    openNumberPanel({ historyMode: "replace" });
     showToast(
       error?.message ||
         "The photo could not be read. Try typing the number."
@@ -568,6 +785,7 @@ function generateCandidates(options = {}) {
 
     if (closePanels) {
       closeInputPanels();
+      closeInputHistoryIfOpen();
     }
 
     window.setTimeout(() => {
@@ -648,7 +866,7 @@ function renderResults() {
 }
 
 function shouldUseRotatedFallback() {
-  return window.innerHeight > window.innerWidth && !orientationLocked;
+  return window.innerHeight > window.innerWidth;
 }
 
 function applyFullscreenOrientation() {
@@ -658,85 +876,41 @@ function applyFullscreenOrientation() {
   );
 }
 
-async function tryNativeLandscape() {
-  openedNativeFullscreen = false;
-  orientationLocked = false;
+function openFullscreen(index, options = {}) {
+  const { historyMode = "push" } = options;
 
-  try {
-    if (
-      !document.fullscreenElement &&
-      typeof elements.fullscreenModal.requestFullscreen === "function"
-    ) {
-      await elements.fullscreenModal.requestFullscreen({
-        navigationUI: "hide"
-      });
-      openedNativeFullscreen = true;
-    }
-  } catch (error) {
-    console.warn("Full-screen request was blocked.", error);
-  }
-
-  try {
-    if (screen.orientation?.lock) {
-      await screen.orientation.lock("landscape");
-      orientationLocked = true;
-    }
-  } catch (error) {
-    console.warn("Landscape orientation lock was blocked.", error);
-  }
-
-  applyFullscreenOrientation();
-}
-
-async function openFullscreen(index) {
   fullscreenIndex = Math.max(0, Math.min(candidates.length - 1, index));
   elements.fullscreenModal.hidden = false;
   document.body.style.overflow = "hidden";
+  applyFullscreenOrientation();
   renderFullscreen();
 
-  await tryNativeLandscape();
+  if (historyMode === "push") {
+    setHistoryView("fullscreen");
+  } else if (historyMode === "replace") {
+    setHistoryView("fullscreen", { replace: true });
+  }
 
   window.setTimeout(() => {
     applyFullscreenOrientation();
     renderFullscreen();
-  }, 220);
+  }, 120);
 }
 
-async function closeFullscreen(options = {}) {
+function closeFullscreenDirectly() {
   if (isClosingFullscreen) {
     return;
   }
 
   isClosingFullscreen = true;
-
-  try {
-    if (screen.orientation?.unlock) {
-      screen.orientation.unlock();
-    }
-  } catch (error) {
-    console.warn("Could not unlock orientation.", error);
-  }
-
-  orientationLocked = false;
   elements.fullscreenModal.classList.remove("force-landscape");
   elements.fullscreenModal.hidden = true;
   document.body.style.overflow = "";
-
-  if (
-    options.exitNative !== false &&
-    openedNativeFullscreen &&
-    document.fullscreenElement &&
-    typeof document.exitFullscreen === "function"
-  ) {
-    try {
-      await document.exitFullscreen();
-    } catch (error) {
-      console.warn("Could not exit browser full screen.", error);
-    }
-  }
-
-  openedNativeFullscreen = false;
   isClosingFullscreen = false;
+}
+
+function closeFullscreen() {
+  closeHistoryView("fullscreen", closeFullscreenDirectly);
 }
 
 function renderFullscreen() {
@@ -857,7 +1031,6 @@ function downloadBlob(blob, filename) {
 }
 
 elements.takePhotoButton.addEventListener("click", () => {
-  closeNumberPanel();
   elements.cameraInput.click();
 });
 
@@ -865,19 +1038,25 @@ elements.openNumberButton.addEventListener("click", () => {
   if (elements.numberPanel.hidden) {
     openNumberPanel();
   } else {
-    closeNumberPanel();
+    closeHistoryView("number", closeNumberPanel);
   }
 });
 
-elements.currentNumberValue.addEventListener("click", openNumberPanel);
+elements.currentNumberValue.addEventListener("click", () => {
+  openNumberPanel();
+});
 
 elements.currentNumberClearButton.addEventListener("click", (event) => {
   event.stopPropagation();
   clearEverything();
 });
 
-elements.closeNumberButton.addEventListener("click", closeNumberPanel);
-elements.cancelPhotoButton.addEventListener("click", closePhotoPanel);
+elements.closeNumberButton.addEventListener("click", () => {
+  closeHistoryView("number", closeNumberPanel);
+});
+elements.cancelPhotoButton.addEventListener("click", () => {
+  closeHistoryView("photo", closePhotoPanel);
+});
 elements.clearButton.addEventListener("click", clearEverything);
 elements.generateButton.addEventListener("click", () => {
   generateCandidates({ closePanels: true });
@@ -939,21 +1118,23 @@ window.addEventListener("orientationchange", () => {
   }, 180);
 });
 
-document.addEventListener("fullscreenchange", () => {
-  if (
-    openedNativeFullscreen &&
-    !document.fullscreenElement &&
-    !elements.fullscreenModal.hidden &&
-    !isClosingFullscreen
-  ) {
-    closeFullscreen({ exitNative: false });
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") {
+    return;
+  }
+
+  if (!elements.fullscreenModal.hidden) {
+    closeFullscreen();
+  } else if (!elements.numberPanel.hidden) {
+    closeHistoryView("number", closeNumberPanel);
+  } else if (!elements.photoPanel.hidden) {
+    closeHistoryView("photo", closePhotoPanel);
   }
 });
 
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !elements.fullscreenModal.hidden) {
-    closeFullscreen();
-  }
+window.addEventListener("popstate", () => {
+  closeAllTransientViewsDirectly();
 });
 
 if ("serviceWorker" in navigator) {

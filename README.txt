@@ -1,15 +1,18 @@
-BARCODE BUDDY — CLEAN ENTRY VIEW
-================================
+BARCODE BUDDY — 22-DIGIT POSTAL UPDATE
+======================================
 
-Changes in this version:
+- Manual entry now requires exactly 22 digits.
+- A ? counts as one of the 22 positions.
+- Every new photo clears the previous number and results first.
+- Barcode decoding is restricted to Code 128, so QR codes are ignored.
+- OCR no longer combines unrelated numbers from the whole shipping label.
+- OCR only accepts a single 22-position line.
+- Common OCR-confused characters are converted carefully.
+- Unreadable positions are shown as ?.
+- One or two ? characters generate the candidate barcodes.
+- More than two unclear positions open the editor instead of inventing a result.
+- Service-worker cache updated to barcode-buddy-v8.
 
-- While Enter Number or Take Photo is open, everything beneath the input panel
-  is hidden. The page ends immediately after Create Barcode.
-- After Create Barcode closes, the barcode results return.
-- The compact line beneath the two main buttons now contains only the barcode
-  number and a small Clear button.
-- The number is forced to stay on one line.
-- The number itself can still be tapped to reopen editing.
-- Service-worker cache updated to barcode-buddy-v6.
-
-Replace every existing repository file with the files from this ZIP.
+The two screenshots supplied with this request show Barcode Buddy's output, not
+the original label photographs. An actual label photo can still be useful for
+fine-tuning the crop and OCR if a specific label format remains difficult.
