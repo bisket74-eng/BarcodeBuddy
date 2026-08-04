@@ -1,6 +1,8 @@
 const ZXING_URL =
   "https://cdn.jsdelivr.net/npm/@zxing/browser@0.2.0/+esm";
 
+const MAX_BARCODE_LENGTH = 18;
+
 const elements = {
   takePhotoButton: document.getElementById("takePhotoButton"),
   openNumberButton: document.getElementById("openNumberButton"),
@@ -18,6 +20,9 @@ const elements = {
   generateButton: document.getElementById("generateButton"),
   currentNumberStrip: document.getElementById("currentNumberStrip"),
   currentNumberValue: document.getElementById("currentNumberValue"),
+  currentNumberClearButton: document.getElementById("currentNumberClearButton"),
+  resultsSection: document.getElementById("resultsSection"),
+  notice: document.getElementById("notice"),
   results: document.getElementById("results"),
   resultCount: document.getElementById("resultCount"),
   fullscreenModal: document.getElementById("fullscreenModal"),
@@ -60,7 +65,7 @@ function sanitizeEditableNumber(value) {
     .replace(/[Oo]/g, "0")
     .replace(/[Il]/g, "1")
     .replace(/[^0-9?]/g, "")
-    .slice(0, 50);
+    .slice(0, MAX_BARCODE_LENGTH);
 }
 
 function updateCurrentNumberStrip() {
@@ -69,6 +74,10 @@ function updateCurrentNumberStrip() {
 
   if (hasNumber) {
     elements.currentNumberValue.textContent = groupNumber(numberText);
+
+    window.requestAnimationFrame(() => {
+      elements.currentNumberValue.scrollLeft = 0;
+    });
   }
 }
 
@@ -119,14 +128,23 @@ function setNumberText(value) {
   updateCurrentNumberStrip();
 }
 
+function updateInputOpenState() {
+  const inputIsOpen =
+    !elements.numberPanel.hidden || !elements.photoPanel.hidden;
+
+  document.body.classList.toggle("input-open", inputIsOpen);
+}
+
 function closeInputPanels() {
   elements.numberPanel.hidden = true;
   elements.photoPanel.hidden = true;
+  updateInputOpenState();
 }
 
 function openNumberPanel() {
   elements.photoPanel.hidden = true;
   elements.numberPanel.hidden = false;
+  updateInputOpenState();
   keypadCaret = numberText.length;
   renderNumberDisplay();
 
@@ -140,11 +158,12 @@ function openNumberPanel() {
 
 function closeNumberPanel() {
   elements.numberPanel.hidden = true;
+  updateInputOpenState();
 }
 
 function insertAtCaret(character) {
-  if (numberText.length >= 50) {
-    showToast("Maximum length reached");
+  if (numberText.length >= MAX_BARCODE_LENGTH) {
+    showToast("Barcode numbers are limited to 18 digits");
     return;
   }
 
@@ -223,6 +242,7 @@ function releasePhotoUrl() {
 
 function closePhotoPanel() {
   elements.photoPanel.hidden = true;
+  updateInputOpenState();
   releasePhotoUrl();
   elements.photoPreview.removeAttribute("src");
   setPhotoStatus("");
@@ -239,14 +259,23 @@ function clearEverything() {
 
 function extractDecodedDigits(text) {
   const cleaned = String(text || "").replace(/\u001d/g, "");
-  const runs = cleaned.match(/\d{8,50}/g);
+  const digitRuns = cleaned.match(/\d+/g) || [];
 
-  if (runs?.length) {
-    return runs.sort((a, b) => b.length - a.length)[0];
+  const exact = digitRuns.find(
+    (run) => run.length === MAX_BARCODE_LENGTH
+  );
+
+  if (exact) {
+    return exact;
   }
 
-  const digits = cleaned.replace(/\D/g, "");
-  return digits.length >= 8 ? digits.slice(0, 50) : "";
+  const combined = cleaned.replace(/\D/g, "");
+
+  if (combined.length >= MAX_BARCODE_LENGTH) {
+    return combined.slice(0, MAX_BARCODE_LENGTH);
+  }
+
+  return "";
 }
 
 function extractBestOcrNumber(text) {
@@ -257,15 +286,22 @@ function extractBestOcrNumber(text) {
   const runs = normalized.match(/\d[\d\s-]{6,60}\d/g) || [];
   const found = runs
     .map((run) => run.replace(/\D/g, ""))
-    .filter((run) => run.length >= 8 && run.length <= 50)
-    .sort((a, b) => b.length - a.length);
+    .filter((run) => run.length >= MAX_BARCODE_LENGTH)
+    .map((run) => run.slice(0, MAX_BARCODE_LENGTH));
 
-  if (found.length) {
-    return found[0];
+  const exact = found.find(
+    (run) => run.length === MAX_BARCODE_LENGTH
+  );
+
+  if (exact) {
+    return exact;
   }
 
   const allDigits = normalized.replace(/\D/g, "");
-  return allDigits.length >= 8 ? allDigits.slice(0, 50) : "";
+
+  return allDigits.length >= MAX_BARCODE_LENGTH
+    ? allDigits.slice(0, MAX_BARCODE_LENGTH)
+    : "";
 }
 
 async function decodeWithNativeDetector(image) {
@@ -381,6 +417,7 @@ async function processPhoto(file) {
   currentPhotoUrl = URL.createObjectURL(file);
   elements.photoPreview.src = currentPhotoUrl;
   elements.photoPanel.hidden = false;
+  updateInputOpenState();
   setPhotoStatus("Loading label photo…", 3);
 
   try {
@@ -502,8 +539,10 @@ function generateCandidates(options = {}) {
     return;
   }
 
-  if (pattern.length < 6) {
-    showToast("That number is too short");
+  if (pattern.length !== MAX_BARCODE_LENGTH) {
+    showToast(
+      `Enter all ${MAX_BARCODE_LENGTH} digits. Use ? for an unreadable digit.`
+    );
     openNumberPanel();
     return;
   }
@@ -830,7 +869,13 @@ elements.openNumberButton.addEventListener("click", () => {
   }
 });
 
-elements.currentNumberStrip.addEventListener("click", openNumberPanel);
+elements.currentNumberValue.addEventListener("click", openNumberPanel);
+
+elements.currentNumberClearButton.addEventListener("click", (event) => {
+  event.stopPropagation();
+  clearEverything();
+});
+
 elements.closeNumberButton.addEventListener("click", closeNumberPanel);
 elements.cancelPhotoButton.addEventListener("click", closePhotoPanel);
 elements.clearButton.addEventListener("click", clearEverything);
@@ -922,3 +967,4 @@ if ("serviceWorker" in navigator) {
 renderNumberDisplay();
 updateCurrentNumberStrip();
 renderResults();
+updateInputOpenState();

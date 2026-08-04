@@ -333,42 +333,59 @@ button:focus-visible {
 
 .current-number-strip {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 9px;
+  gap: 7px;
   width: 100%;
-  min-height: 49px;
-  margin: 0 0 17px;
-  padding: 9px 12px;
-  border: 1px solid rgba(0,103,169,0.20);
-  border-radius: 15px;
+  min-height: 38px;
+  margin: 0 0 14px;
+  padding: 4px 5px 4px 10px;
+  border: 1px solid rgba(0,103,169,0.18);
+  border-radius: 11px;
   color: var(--ink);
-  background: rgba(255,255,255,0.84);
-  box-shadow: var(--small-shadow);
-  cursor: pointer;
-  text-align: left;
+  background: rgba(255,255,255,0.78);
+  box-shadow: 0 4px 12px rgba(0, 53, 96, 0.07);
 }
 
 .current-number-strip[hidden] {
   display: none;
 }
 
-.current-number-strip span {
-  color: var(--muted);
-  font-size: 0.79rem;
-  font-weight: 800;
-}
-
-.current-number-strip strong {
+.current-number-value {
   min-width: 0;
-  overflow-wrap: anywhere;
-  font-size: clamp(0.9rem, 4.2vw, 1.05rem);
-  letter-spacing: 0.055em;
+  padding: 5px 2px;
+  overflow-x: auto;
+  border: 0;
+  color: var(--ink);
+  background: transparent;
+  white-space: nowrap;
+  text-align: left;
+  font-size: clamp(0.74rem, 3.25vw, 0.89rem);
+  font-weight: 900;
+  letter-spacing: 0.035em;
+  scrollbar-width: none;
 }
 
-.current-number-strip small {
-  color: var(--navy);
+.current-number-value::-webkit-scrollbar {
+  display: none;
+}
+
+.current-number-clear {
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--danger);
+  background: #fff0f2;
+  cursor: pointer;
+  font-size: 0.72rem;
   font-weight: 900;
+}
+
+body.input-open .current-number-strip,
+body.input-open .results-section,
+body.input-open .notice {
+  display: none !important;
 }
 
 .results-section {

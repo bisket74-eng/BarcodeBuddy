@@ -1,22 +1,15 @@
-BARCODE BUDDY
-=============
+BARCODE BUDDY — CLEAN ENTRY VIEW
+================================
 
-This version changes the app to a cleaner postal-style blue color scheme.
+Changes in this version:
 
-FILES
------
-index.html
-styles.css
-app.js
-manifest.json
-sw.js
-icon-192.png
-icon-512.png
+- While Enter Number or Take Photo is open, everything beneath the input panel
+  is hidden. The page ends immediately after Create Barcode.
+- After Create Barcode closes, the barcode results return.
+- The compact line beneath the two main buttons now contains only the barcode
+  number and a small Clear button.
+- The number is forced to stay on one line.
+- The number itself can still be tapped to reopen editing.
+- Service-worker cache updated to barcode-buddy-v6.
 
-UPLOAD
-------
-Replace every file in the existing GitHub repository with the files in this ZIP.
-Keep all filenames exactly as provided.
-
-The service-worker cache was changed to barcode-buddy-v3 so the new blue design
-replaces the previously cached purple version.
+Replace every existing repository file with the files from this ZIP.
