@@ -28,6 +28,10 @@ const elements = {
   notice: document.getElementById("notice"),
   results: document.getElementById("results"),
   resultCount: document.getElementById("resultCount"),
+  foundListModal: document.getElementById("foundListModal"),
+  foundList: document.getElementById("foundList"),
+  foundListCount: document.getElementById("foundListCount"),
+  closeFoundListButton: document.getElementById("closeFoundListButton"),
   fullscreenModal: document.getElementById("fullscreenModal"),
   closeFullscreenButton: document.getElementById("closeFullscreenButton"),
   fullscreenCanvas: document.getElementById("fullscreenCanvas"),
@@ -46,6 +50,9 @@ let fullscreenIndex = 0;
 let currentPhotoUrl = "";
 let toastTimer = 0;
 let isClosingFullscreen = false;
+let foundBarcodes = [];
+let viewedFoundBarcodes = new Set();
+let fullscreenReturnView = "main";
 
 const HISTORY_VIEW_KEY = "barcodeBuddyView";
 
@@ -64,16 +71,18 @@ function getHistoryView() {
 }
 
 function setHistoryView(view, options = {}) {
-  const { replace = false } = options;
+  const { replace = false, forcePush = false } = options;
   const state = {
     ...(history.state || {}),
     [HISTORY_VIEW_KEY]: view
   };
 
-  if (replace || getHistoryView()) {
+  if (replace) {
     history.replaceState(state, "", window.location.href);
-  } else {
+  } else if (forcePush || !getHistoryView()) {
     history.pushState(state, "", window.location.href);
+  } else {
+    history.replaceState(state, "", window.location.href);
   }
 }
 
@@ -96,6 +105,7 @@ function closeInputHistoryIfOpen() {
 function closeAllTransientViewsDirectly() {
   elements.numberPanel.hidden = true;
   elements.photoPanel.hidden = true;
+  elements.foundListModal.hidden = true;
   elements.fullscreenModal.hidden = true;
   elements.fullscreenModal.classList.remove("force-landscape");
   document.body.style.overflow = "";
@@ -128,6 +138,7 @@ function updateCurrentNumberStrip() {
 }
 
 function renderNumberDisplay() {
+  keypadCaret = Math.max(0, Math.min(keypadCaret, numberText.length));
   elements.numberDisplay.innerHTML = "";
 
   if (!numberText) {
@@ -163,7 +174,21 @@ function renderNumberDisplay() {
 
   window.requestAnimationFrame(() => {
     const caret = elements.numberDisplay.querySelector(".keypad-caret");
-    caret?.scrollIntoView({ inline: "center", block: "nearest" });
+
+    if (!caret) {
+      return;
+    }
+
+    const displayRect = elements.numberDisplay.getBoundingClientRect();
+    const caretRect = caret.getBoundingClientRect();
+
+    if (caretRect.right > displayRect.right - 12) {
+      elements.numberDisplay.scrollLeft +=
+        caretRect.right - displayRect.right + 18;
+    } else if (caretRect.left < displayRect.left + 12) {
+      elements.numberDisplay.scrollLeft -=
+        displayRect.left - caretRect.left + 18;
+    }
   });
 }
 
@@ -306,31 +331,32 @@ function clearEverything() {
   setNumberText("");
   keypadCaret = 0;
   candidates = [];
+  foundBarcodes = [];
+  viewedFoundBarcodes = new Set();
+  closeFoundListDirectly();
   renderResults();
   closePhotoPanel();
   showToast("Cleared");
 }
 
-function extractDecodedDigits(text) {
-  const raw = String(text || "").replace(/\u001d/g, "|");
-  const exactRuns = raw.match(/\d{22}/g) || [];
+function uniqueValues(values) {
+  return [...new Set(values.filter(Boolean))];
+}
 
-  if (exactRuns.length === 1) {
-    return exactRuns[0];
-  }
+function extractDecodedDigitList(text) {
+  const raw = String(text || "").replace(/\u001d/g, "|");
+  const found = raw.match(/\d{22}/g) || [];
 
   const separatedRuns = raw
     .split("|")
     .map((part) => part.replace(/\D/g, ""))
     .filter(Boolean);
 
-  const exactSeparated = separatedRuns.find(
-    (run) => run.length === MAX_BARCODE_LENGTH
-  );
-
-  if (exactSeparated) {
-    return exactSeparated;
-  }
+  separatedRuns.forEach((run) => {
+    if (run.length === MAX_BARCODE_LENGTH) {
+      found.push(run);
+    }
+  });
 
   // Some GS1-128 results contain routing data first and the 22-digit
   // tracking number as the final section. Only use that when a GS separator
@@ -339,11 +365,15 @@ function extractDecodedDigits(text) {
     const finalRun = separatedRuns.at(-1) || "";
 
     if (finalRun.length >= MAX_BARCODE_LENGTH) {
-      return finalRun.slice(-MAX_BARCODE_LENGTH);
+      found.push(finalRun.slice(-MAX_BARCODE_LENGTH));
     }
   }
 
-  return "";
+  return uniqueValues(found);
+}
+
+function extractDecodedDigits(text) {
+  return extractDecodedDigitList(text)[0] || "";
 }
 
 function normalizeOcrCharacter(character) {
@@ -414,27 +444,50 @@ function patternFromOcrLine(line) {
   return "";
 }
 
-function extractBestOcrPattern(text) {
+function extractAllOcrPatterns(text) {
   const lines = String(text || "")
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
 
-  const patterns = lines
-    .map(patternFromOcrLine)
-    .filter((pattern) => pattern.length === MAX_BARCODE_LENGTH)
-    .sort((a, b) => {
-      const unknownA = (a.match(/\?/g) || []).length;
-      const unknownB = (b.match(/\?/g) || []).length;
-      return unknownA - unknownB;
+  const patterns = [];
+
+  lines.forEach((line) => {
+    const exactRuns = line.match(/\d{22}/g) || [];
+    patterns.push(...exactRuns);
+
+    const groupedMatches =
+      line.match(/(?:[0-9OoQDIil|!ZSsGgBb]{3,4}[\s\-_.]+){5}[0-9OoQDIil|!ZSsGgBb]{1,2}/g) || [];
+
+    groupedMatches.forEach((match) => {
+      const pattern = patternFromOcrLine(match);
+
+      if (pattern) {
+        patterns.push(pattern);
+      }
     });
 
-  return patterns[0] || "";
+    const wholeLinePattern = patternFromOcrLine(line);
+
+    if (wholeLinePattern) {
+      patterns.push(wholeLinePattern);
+    }
+  });
+
+  return uniqueValues(patterns).sort((a, b) => {
+    const unknownA = (a.match(/\?/g) || []).length;
+    const unknownB = (b.match(/\?/g) || []).length;
+    return unknownA - unknownB;
+  });
 }
 
-async function decodeWithNativeDetector(image) {
+function extractBestOcrPattern(text) {
+  return extractAllOcrPatterns(text)[0] || "";
+}
+
+async function decodeAllWithNativeDetector(image) {
   if (!("BarcodeDetector" in window)) {
-    return "";
+    return [];
   }
 
   try {
@@ -444,16 +497,21 @@ async function decodeWithNativeDetector(image) {
         : ["code_128"];
 
     if (!supported.includes("code_128")) {
-      return "";
+      return [];
     }
 
     const detector = new BarcodeDetector({ formats: ["code_128"] });
     const results = await detector.detect(image);
-    return results?.[0]?.rawValue || "";
+    return uniqueValues((results || []).map((result) => result?.rawValue || ""));
   } catch (error) {
     console.warn("Native barcode detection failed.", error);
-    return "";
+    return [];
   }
+}
+
+async function decodeWithNativeDetector(image) {
+  const results = await decodeAllWithNativeDetector(image);
+  return results[0] || "";
 }
 
 async function decodeWithZxing(image) {
@@ -550,7 +608,7 @@ function makeOcrRegions(image) {
   return regions;
 }
 
-async function runOcr(image) {
+async function runOcrPatterns(image) {
   if (!window.Tesseract?.createWorker) {
     throw new Error("OCR could not load. Check the internet connection.");
   }
@@ -560,7 +618,7 @@ async function runOcr(image) {
     logger(message) {
       if (message.status === "recognizing text") {
         const percent = Math.round((message.progress || 0) * 100);
-        setPhotoStatus(`Reading the 22-digit number… ${percent}%`, percent);
+        setPhotoStatus(`Reading barcode numbers… ${percent}%`, percent);
       } else {
         setPhotoStatus("Preparing number reader…", 8);
       }
@@ -574,32 +632,123 @@ async function runOcr(image) {
       tessedit_pageseg_mode: "6"
     });
 
-    let bestPattern = "";
+    const patterns = [];
 
     for (const region of regions) {
       const result = await worker.recognize(region);
-      const pattern = extractBestOcrPattern(result?.data?.text || "");
-
-      if (!pattern) {
-        continue;
-      }
-
-      const currentUnknown = (bestPattern.match(/\?/g) || []).length;
-      const newUnknown = (pattern.match(/\?/g) || []).length;
-
-      if (!bestPattern || newUnknown < currentUnknown) {
-        bestPattern = pattern;
-      }
-
-      if (newUnknown === 0) {
-        break;
-      }
+      patterns.push(...extractAllOcrPatterns(result?.data?.text || ""));
     }
 
-    return bestPattern;
+    return uniqueValues(patterns).sort((a, b) => {
+      const unknownA = (a.match(/\?/g) || []).length;
+      const unknownB = (b.match(/\?/g) || []).length;
+      return unknownA - unknownB;
+    });
   } finally {
     await worker.terminate();
   }
+}
+
+async function runOcr(image) {
+  const patterns = await runOcrPatterns(image);
+  return patterns[0] || "";
+}
+
+function renderFoundList() {
+  elements.foundList.innerHTML = "";
+  elements.foundListCount.textContent = String(foundBarcodes.length);
+
+  foundBarcodes.forEach((value, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "found-list-item";
+
+    if (viewedFoundBarcodes.has(value)) {
+      button.classList.add("previously-opened");
+    }
+
+    const number = document.createElement("span");
+    number.className = "found-list-number";
+    number.textContent = groupNumber(value);
+
+    const action = document.createElement("span");
+    action.className = "found-list-action";
+    action.textContent = "Open";
+
+    button.append(number, action);
+    button.addEventListener("click", () => {
+      viewedFoundBarcodes.add(value);
+      renderFoundList();
+      openFullscreen(index, {
+        historyMode: "push",
+        forcePush: true,
+        returnView: "found-list"
+      });
+    });
+
+    elements.foundList.appendChild(button);
+  });
+}
+
+function openFoundList(options = {}) {
+  const { historyMode = "push" } = options;
+
+  if (!foundBarcodes.length) {
+    return;
+  }
+
+  renderFoundList();
+  elements.foundListModal.hidden = false;
+  document.body.style.overflow = "hidden";
+
+  if (historyMode === "replace") {
+    setHistoryView("found-list", { replace: true });
+  } else if (historyMode === "push") {
+    setHistoryView("found-list");
+  }
+}
+
+function closeFoundListDirectly() {
+  elements.foundListModal.hidden = true;
+
+  if (elements.fullscreenModal.hidden) {
+    document.body.style.overflow = "";
+  }
+}
+
+function closeFoundList() {
+  closeHistoryView("found-list", closeFoundListDirectly);
+}
+
+function showDetectedBarcodes(values, options = {}) {
+  const { historyMode = "replace" } = options;
+  foundBarcodes = uniqueValues(
+    values
+      .map((value) => sanitizeEditableNumber(value))
+      .filter((value) => /^\d{22}$/.test(value))
+  );
+  viewedFoundBarcodes = new Set();
+
+  if (!foundBarcodes.length) {
+    return false;
+  }
+
+  candidates = [...foundBarcodes];
+  renderResults();
+  closePhotoPanel();
+
+  if (foundBarcodes.length === 1) {
+    setNumberText(foundBarcodes[0]);
+    keypadCaret = numberText.length;
+    generateCandidates({ closePanels: true, fromPhoto: true });
+    showToast("Barcode read from photo");
+    return true;
+  }
+
+  setNumberText("");
+  openFoundList({ historyMode });
+  showToast(`${foundBarcodes.length} barcodes found`);
+  return true;
 }
 
 async function processPhoto(file) {
@@ -607,10 +756,13 @@ async function processPhoto(file) {
     return;
   }
 
-  // A new photo must never reuse the previous label's number.
+  // A new photo must never reuse the previous label's number or list.
   setNumberText("");
   keypadCaret = 0;
   candidates = [];
+  foundBarcodes = [];
+  viewedFoundBarcodes = new Set();
+  closeFoundListDirectly();
   renderResults();
 
   const replaceExistingView = Boolean(getHistoryView());
@@ -623,41 +775,60 @@ async function processPhoto(file) {
   elements.photoPreview.src = currentPhotoUrl;
   elements.photoPanel.hidden = false;
   updateInputOpenState();
-  setPhotoStatus("Loading label photo…", 3);
+  setPhotoStatus("Loading photo…", 3);
 
   try {
     await elements.photoPreview.decode();
 
-    setPhotoStatus("Trying to read the barcode…", 12);
+    setPhotoStatus("Looking for barcodes…", 12);
 
-    let decoded = await decodeWithNativeDetector(elements.photoPreview);
+    const decodedValues = await decodeAllWithNativeDetector(
+      elements.photoPreview
+    );
 
-    if (!decoded) {
-      decoded = await decodeWithZxing(elements.photoPreview);
+    if (!decodedValues.length) {
+      const zxingValue = await decodeWithZxing(elements.photoPreview);
+
+      if (zxingValue) {
+        decodedValues.push(zxingValue);
+      }
     }
 
-    const decodedDigits = extractDecodedDigits(decoded);
+    const decodedNumbers = uniqueValues(
+      decodedValues.flatMap(extractDecodedDigitList)
+    );
 
-    if (decodedDigits) {
-      setNumberText(decodedDigits);
-      closePhotoPanel();
-      generateCandidates({ closePanels: true, fromPhoto: true });
-      showToast("Barcode read from photo");
+    if (decodedNumbers.length > 1) {
+      showDetectedBarcodes(decodedNumbers, { historyMode: "replace" });
       return;
     }
 
     setPhotoStatus(
-      "The barcode did not scan. Trying to read the printed numbers…",
+      decodedNumbers.length
+        ? "One barcode was found. Checking for any others…"
+        : "Trying to read the printed numbers…",
       18
     );
 
-    const ocrPattern = await runOcr(elements.photoPreview);
+    const ocrPatterns = await runOcrPatterns(elements.photoPreview);
+    const exactOcrNumbers = ocrPatterns.filter((pattern) => /^\d{22}$/.test(pattern));
+    const allExactNumbers = uniqueValues([
+      ...decodedNumbers,
+      ...exactOcrNumbers
+    ]);
 
-    if (ocrPattern) {
-      setNumberText(ocrPattern);
+    if (allExactNumbers.length) {
+      showDetectedBarcodes(allExactNumbers, { historyMode: "replace" });
+      return;
+    }
+
+    const bestPattern = ocrPatterns[0] || "";
+
+    if (bestPattern) {
+      setNumberText(bestPattern);
       closePhotoPanel();
 
-      const unknownCount = (ocrPattern.match(/\?/g) || []).length;
+      const unknownCount = (bestPattern.match(/\?/g) || []).length;
 
       if (unknownCount <= 2) {
         generateCandidates({ closePanels: true, fromPhoto: true });
@@ -877,8 +1048,13 @@ function applyFullscreenOrientation() {
 }
 
 function openFullscreen(index, options = {}) {
-  const { historyMode = "push" } = options;
+  const {
+    historyMode = "push",
+    forcePush = false,
+    returnView = "main"
+  } = options;
 
+  fullscreenReturnView = returnView;
   fullscreenIndex = Math.max(0, Math.min(candidates.length - 1, index));
   elements.fullscreenModal.hidden = false;
   document.body.style.overflow = "hidden";
@@ -886,7 +1062,7 @@ function openFullscreen(index, options = {}) {
   renderFullscreen();
 
   if (historyMode === "push") {
-    setHistoryView("fullscreen");
+    setHistoryView("fullscreen", { forcePush });
   } else if (historyMode === "replace") {
     setHistoryView("fullscreen", { replace: true });
   }
@@ -905,7 +1081,11 @@ function closeFullscreenDirectly() {
   isClosingFullscreen = true;
   elements.fullscreenModal.classList.remove("force-landscape");
   elements.fullscreenModal.hidden = true;
-  document.body.style.overflow = "";
+  document.body.style.overflow =
+    fullscreenReturnView === "found-list" &&
+    !elements.foundListModal.hidden
+      ? "hidden"
+      : "";
   isClosingFullscreen = false;
 }
 
@@ -919,6 +1099,11 @@ function renderFullscreen() {
   if (!value) {
     closeFullscreen();
     return;
+  }
+
+  if (fullscreenReturnView === "found-list") {
+    viewedFoundBarcodes.add(value);
+    renderFoundList();
   }
 
   drawBarcode(elements.fullscreenCanvas, value, true);
@@ -1084,6 +1269,10 @@ elements.numberDisplay.addEventListener("click", (event) => {
   renderNumberDisplay();
 });
 
+elements.closeFoundListButton.addEventListener("click", () => {
+  closeFoundList();
+});
+
 elements.closeFullscreenButton.addEventListener("click", () => {
   closeFullscreen();
 });
@@ -1126,6 +1315,8 @@ document.addEventListener("keydown", (event) => {
 
   if (!elements.fullscreenModal.hidden) {
     closeFullscreen();
+  } else if (!elements.foundListModal.hidden) {
+    closeFoundList();
   } else if (!elements.numberPanel.hidden) {
     closeHistoryView("number", closeNumberPanel);
   } else if (!elements.photoPanel.hidden) {
@@ -1133,8 +1324,15 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-window.addEventListener("popstate", () => {
+window.addEventListener("popstate", (event) => {
+  const view = event.state?.[HISTORY_VIEW_KEY] || "";
   closeAllTransientViewsDirectly();
+
+  if (view === "found-list" && foundBarcodes.length) {
+    renderFoundList();
+    elements.foundListModal.hidden = false;
+    document.body.style.overflow = "hidden";
+  }
 });
 
 if ("serviceWorker" in navigator) {

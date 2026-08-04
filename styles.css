@@ -182,15 +182,15 @@ button:focus-visible {
 .number-display {
   display: flex;
   align-items: center;
-  min-height: 58px;
-  padding: 10px 12px;
-  border: 1px solid rgba(0,103,169,0.26);
+  min-height: 74px;
+  padding: 14px 15px;
+  border: 2px solid rgba(0,103,169,0.34);
   border-radius: 15px;
   color: var(--ink);
   overflow-x: auto;
   background: #fff;
   white-space: nowrap;
-  font-size: clamp(1rem, 4.8vw, 1.22rem);
+  font-size: clamp(1.06rem, 5.15vw, 1.32rem);
   font-weight: 850;
   letter-spacing: 0.06em;
 }
@@ -203,16 +203,21 @@ button:focus-visible {
 
 .keypad-digit {
   display: inline-block;
+  flex: 0 0 auto;
   padding: 3px 1px;
   border-radius: 4px;
 }
 
 .keypad-caret {
   display: inline-block;
-  width: 2px;
-  height: 1.35em;
-  margin: 0 1px;
+  flex: 0 0 3px;
+  width: 3px;
+  min-width: 3px;
+  height: 1.45em;
+  margin: 0 2px;
+  border-radius: 999px;
   background: var(--blue-bright);
+  box-shadow: 0 0 0 1px rgba(22, 137, 209, 0.18), 0 0 8px rgba(22, 137, 209, 0.35);
   vertical-align: -0.25em;
   animation: blink 900ms steps(1) infinite;
 }
@@ -222,13 +227,28 @@ button:focus-visible {
 }
 
 .clear-button {
-  min-width: 71px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  color: var(--danger);
-  background: #fff2f4;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 1px;
+  min-width: 88px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 15px;
+  color: #fff;
+  background: linear-gradient(145deg, #b93443, #d84b5c);
+  box-shadow: 0 7px 16px rgba(198, 63, 79, 0.25);
   cursor: pointer;
-  font-weight: 850;
+  font-size: 0.76rem;
+  line-height: 1.05;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.035em;
+}
+
+.clear-button span:first-child {
+  font-size: 1.28rem;
+  line-height: 0.9;
 }
 
 .helper {
@@ -246,13 +266,41 @@ button:focus-visible {
 }
 
 .cursor-controls button {
-  min-height: 42px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  color: var(--ink);
-  background: #f0ecf7;
-  font-size: 1.1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 48px;
+  padding: 7px 9px;
+  border: 1px solid rgba(0, 103, 169, 0.24);
+  border-radius: 14px;
+  color: var(--navy);
+  background: linear-gradient(180deg, #ffffff, #e9f4fb);
+  box-shadow:
+    0 5px 12px rgba(0, 53, 96, 0.09),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  cursor: pointer;
+  font-size: 0.78rem;
   font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+}
+
+.cursor-controls svg {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.cursor-controls .delete-control {
+  color: #9f2f3c;
+  border-color: rgba(198, 63, 79, 0.24);
+  background: linear-gradient(180deg, #fff, #fff0f2);
 }
 
 .ten-key {
@@ -503,6 +551,150 @@ body.input-open .notice {
   line-height: 1.45;
 }
 
+
+.found-list-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding:
+    max(16px, env(safe-area-inset-top))
+    12px
+    max(16px, env(safe-area-inset-bottom));
+  background: rgba(0, 27, 51, 0.72);
+  backdrop-filter: blur(8px);
+}
+
+.found-list-modal[hidden] {
+  display: none;
+}
+
+.found-list-surface {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 560px);
+  max-height: min(88dvh, 760px);
+  padding: 20px 16px 16px;
+  border: 2px solid rgba(255,255,255,0.58);
+  border-radius: 24px;
+  background: linear-gradient(165deg, #f7fbfe, #eaf4fa);
+  box-shadow: 0 24px 70px rgba(0, 27, 51, 0.38);
+}
+
+.found-list-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border: 0;
+  border-radius: 13px;
+  color: #fff;
+  background: var(--danger);
+  box-shadow: 0 6px 16px rgba(198, 63, 79, 0.28);
+  cursor: pointer;
+  font-size: 1.35rem;
+  font-weight: 900;
+}
+
+.found-list-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+  padding: 4px 50px 13px 3px;
+}
+
+.found-list-heading h2 {
+  margin: 0;
+  color: var(--navy);
+  font-size: clamp(1.35rem, 6vw, 1.8rem);
+  letter-spacing: -0.035em;
+}
+
+.found-list-heading p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.35;
+}
+
+.found-list-count {
+  display: grid;
+  place-items: center;
+  min-width: 38px;
+  min-height: 34px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  color: #fff;
+  background: var(--navy);
+  font-weight: 900;
+}
+
+.found-list {
+  display: grid;
+  gap: 10px;
+  overflow-y: auto;
+  padding: 2px 3px 4px;
+  overscroll-behavior: contain;
+}
+
+.found-list-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 64px;
+  padding: 12px 13px 12px 16px;
+  border: 2px solid rgba(0, 103, 169, 0.28);
+  border-radius: 16px;
+  color: var(--ink);
+  background: #fff;
+  box-shadow: 0 7px 17px rgba(0, 53, 96, 0.10);
+  cursor: pointer;
+  text-align: left;
+  transition: background 150ms ease, border-color 150ms ease, transform 100ms ease;
+}
+
+.found-list-item:active {
+  transform: translateY(1px);
+}
+
+.found-list-item.previously-opened {
+  color: #405566;
+  border-color: rgba(77, 100, 118, 0.30);
+  background: #dfe7ed;
+  box-shadow: 0 4px 10px rgba(35, 55, 70, 0.08);
+}
+
+.found-list-number {
+  overflow-wrap: anywhere;
+  font-size: clamp(0.92rem, 4.2vw, 1.08rem);
+  font-weight: 900;
+  letter-spacing: 0.045em;
+}
+
+.found-list-action {
+  min-width: 56px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  color: #fff;
+  background: var(--blue);
+  text-align: center;
+  font-size: 0.74rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.found-list-item.previously-opened .found-list-action {
+  background: #657c8e;
+}
+
 .fullscreen-modal {
   position: fixed;
   inset: 0;
@@ -540,7 +732,8 @@ body.input-open .notice {
   border: 0;
   border-radius: 13px;
   color: #fff;
-  background: #003b6f;
+  background: var(--danger);
+  box-shadow: 0 6px 16px rgba(198, 63, 79, 0.30);
   cursor: pointer;
   font-size: 1.35rem;
   font-weight: 900;
