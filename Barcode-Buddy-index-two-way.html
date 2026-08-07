@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover"
+  />
+  <meta name="theme-color" content="#003b6f" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta
+    name="description"
+    content="Barcode Buddy helps recreate an existing package barcode from a photo or tracking number."
+  />
+  <title>Barcode Buddy</title>
+
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="icon" href="./icon-192.png" />
+  <link rel="apple-touch-icon" href="./icon-192.png" />
+  <link rel="stylesheet" href="./styles.css" />
+
+  <script defer src="https://cdn.jsdelivr.net/npm/bwip-js@4.10.2/dist/bwip-js-min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js"></script>
+  <script type="module" src="./app.js"></script>
+
+  <style>
+    .mode-switch {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 5px;
+      width: min(100%, 430px);
+      margin: -2px auto 15px;
+      padding: 4px;
+      border: 1px solid rgba(0, 103, 169, 0.16);
+      border-radius: 14px;
+      background: rgba(255,255,255,0.84);
+      box-shadow: 0 7px 18px rgba(0, 53, 96, 0.08);
+    }
+
+    .mode-option {
+      min-height: 39px;
+      padding: 7px 8px;
+      border: 0;
+      border-radius: 10px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      font-size: clamp(0.73rem, 3.2vw, 0.84rem);
+      font-weight: 900;
+      white-space: nowrap;
+    }
+
+    .mode-option.active {
+      color: #fff;
+      background: linear-gradient(135deg, var(--navy), var(--blue-bright));
+      box-shadow: 0 5px 12px rgba(0,103,169,0.19);
+    }
+
+    body.barcode-read-mode .action-grid {
+      grid-template-columns: 1fr;
+    }
+
+    body.barcode-read-mode #openNumberButton,
+    body.barcode-read-mode #currentNumberStrip,
+    body.barcode-read-mode #resultsSection,
+    body.barcode-read-mode #notice,
+    body.barcode-read-mode #numberPanel {
+      display: none !important;
+    }
+
+    body:not(.barcode-read-mode) #readResultPanel {
+      display: none !important;
+    }
+
+    body.input-open #readResultPanel {
+      display: none !important;
+    }
+
+    .read-result-panel {
+      margin: 0 0 15px;
+      padding: 11px;
+      border: 1px solid rgba(0,103,169,0.17);
+      border-radius: 14px;
+      background: rgba(255,255,255,0.90);
+      box-shadow: 0 6px 16px rgba(0,53,96,0.08);
+    }
+
+    .read-result-panel[hidden] {
+      display: none;
+    }
+
+    .read-result-heading {
+      margin: 0 0 7px 2px;
+      color: var(--muted);
+      font-size: 0.74rem;
+      font-weight: 900;
+    }
+
+    .read-result-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .read-barcode-number {
+      min-width: 0;
+      overflow-x: auto;
+      padding: 7px 4px;
+      color: var(--ink);
+      white-space: nowrap;
+      scrollbar-width: none;
+      font-size: clamp(0.78rem, 3.25vw, 0.93rem);
+      font-weight: 900;
+      letter-spacing: 0.025em;
+    }
+
+    .read-barcode-number::-webkit-scrollbar {
+      display: none;
+    }
+
+    .read-copy-button,
+    .read-clear-button {
+      min-height: 32px;
+      padding: 5px 9px;
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.72rem;
+      font-weight: 900;
+    }
+
+    .read-copy-button {
+      color: #fff;
+      background: var(--blue);
+    }
+
+    .read-clear-button {
+      color: var(--danger);
+      background: #fff0f2;
+    }
+
+    @media (max-width: 350px) {
+      .mode-option {
+        font-size: 0.68rem;
+        padding-left: 5px;
+        padding-right: 5px;
+      }
+
+      .read-result-row {
+        gap: 4px;
+      }
+
+      .read-copy-button,
+      .read-clear-button {
+        padding-left: 7px;
+        padding-right: 7px;
+      }
+    }
+  </style>
+
+</head>
+
+<body>
+  <main class="app-shell">
+    <header class="hero">
+      <img class="hero-icon" src="./icon-192.png" alt="" />
+      <h1>Barcode Buddy</h1>
+    </header>
+
+    <section class="mode-switch" aria-label="Barcode Buddy mode">
+      <button
+        id="numberToBarcodeMode"
+        class="mode-option active"
+        type="button"
+        aria-pressed="true"
+      >
+        Number → Barcode
+      </button>
+
+      <button
+        id="barcodeToNumberMode"
+        class="mode-option"
+        type="button"
+        aria-pressed="false"
+      >
+        Barcode → Number
+      </button>
+    </section>
+
+    <section class="action-grid" id="actionGrid" aria-label="Choose how to enter a barcode">
+      <button class="action-button photo-action" id="takePhotoButton" type="button">
+        <span class="action-icon" aria-hidden="true">▣</span>
+        <span>Take Photo</span>
+      </button>
+
+      <button class="action-button number-action" id="openNumberButton" type="button">
+        <span class="action-icon" aria-hidden="true">123</span>
+        <span>Enter Number</span>
+      </button>
+
+      <input
+        id="cameraInput"
+        class="visually-hidden"
+        type="file"
+        accept="image/*"
+        capture="environment"
+      />
+    </section>
+
+    <section id="photoPanel" class="input-panel photo-panel" hidden>
+      <div class="panel-heading">
+        <h2>Reading label</h2>
+        <button id="cancelPhotoButton" class="panel-close" type="button" aria-label="Close photo">
+          ×
+        </button>
+      </div>
+
+      <img id="photoPreview" class="photo-preview" alt="Selected package label" />
+
+      <div class="photo-status" id="photoStatus" aria-live="polite"></div>
+
+      <div class="progress-track" id="progressTrack" hidden>
+        <div class="progress-bar" id="progressBar"></div>
+      </div>
+    </section>
+
+    <section id="numberPanel" class="input-panel number-panel" hidden>
+      <div class="panel-heading">
+        <h2>Enter barcode number</h2>
+        <button id="closeNumberButton" class="panel-close" type="button" aria-label="Close number entry">
+          ×
+        </button>
+      </div>
+
+      <div class="number-row">
+        <div id="numberDisplay" class="number-display empty" aria-live="polite">
+          Enter numbers below
+        </div>
+
+        <button id="clearButton" class="clear-button" type="button">
+          Clear
+        </button>
+      </div>
+
+      <p class="helper">
+        Enter exactly <strong>22, 24, or 26 digits</strong>. Use <strong>?</strong> for an
+        unreadable digit; one question mark creates ten possible barcodes.
+      </p>
+
+      <div class="cursor-controls">
+        <button type="button" data-key="left" aria-label="Move cursor left">←</button>
+        <button type="button" data-key="right" aria-label="Move cursor right">→</button>
+        <button type="button" data-key="backspace" aria-label="Backspace">⌫</button>
+      </div>
+
+      <div class="ten-key" aria-label="Ten-key number pad">
+        <button type="button" data-key="1">1</button>
+        <button type="button" data-key="2">2</button>
+        <button type="button" data-key="3">3</button>
+        <button type="button" data-key="4">4</button>
+        <button type="button" data-key="5">5</button>
+        <button type="button" data-key="6">6</button>
+        <button type="button" data-key="7">7</button>
+        <button type="button" data-key="8">8</button>
+        <button type="button" data-key="9">9</button>
+        <button type="button" data-key="?">?</button>
+        <button type="button" data-key="0">0</button>
+        <button type="button" data-key="clear" class="key-clear">Clear</button>
+      </div>
+
+      <button id="generateButton" class="generate-button" type="button">
+        Create Barcode
+      </button>
+    </section>
+
+    <div id="currentNumberStrip" class="current-number-strip" hidden>
+      <button
+        id="currentNumberValue"
+        class="current-number-value"
+        type="button"
+        aria-label="Edit the current barcode number"
+      ></button>
+
+      <button
+        id="currentNumberClearButton"
+        class="current-number-clear"
+        type="button"
+      >
+        Clear
+      </button>
+    </div>
+
+    <section id="readResultPanel" class="read-result-panel" hidden>
+      <div class="read-result-heading">Barcode Number</div>
+
+      <div class="read-result-row">
+        <div id="readBarcodeNumber" class="read-barcode-number"></div>
+
+        <button id="copyReadNumberButton" class="read-copy-button" type="button">
+          Copy
+        </button>
+
+        <button id="clearReadNumberButton" class="read-clear-button" type="button">
+          Clear
+        </button>
+      </div>
+    </section>
+
+    <section id="resultsSection" class="results-section">
+      <div class="results-heading">
+        <h2>Barcode Results</h2>
+        <span id="resultCount" class="result-count">0</span>
+      </div>
+
+      <div id="results" class="results" aria-live="polite">
+        <div class="empty-results">
+          Take a label photo or enter the complete number above.
+        </div>
+      </div>
+    </section>
+
+    <aside id="notice" class="notice">
+      This recreates a barcode for an existing number. It does not create postage,
+      register a shipment, or guarantee that every original postal barcode can be
+      reconstructed from its printed number.
+    </aside>
+  </main>
+
+  <div id="fullscreenModal" class="fullscreen-modal" hidden>
+    <div class="fullscreen-surface">
+      <button
+        id="closeFullscreenButton"
+        class="fullscreen-close"
+        type="button"
+        aria-label="Close full-screen barcode"
+      >
+        ×
+      </button>
+
+      <div class="fullscreen-stage">
+        <canvas id="fullscreenCanvas"></canvas>
+        <div id="fullscreenNumber" class="fullscreen-number"></div>
+      </div>
+
+      <div id="fullscreenNavigation" class="fullscreen-navigation" hidden>
+        <button id="previousCandidateButton" type="button">Previous</button>
+        <span id="fullscreenPosition"></span>
+        <button id="nextCandidateButton" type="button">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script type="module">
+    (() => {
+      "use strict";
+
+      const ZXING_BROWSER_URL =
+        "https://cdn.jsdelivr.net/npm/@zxing/browser@0.2.0/+esm";
+      const ZXING_LIBRARY_URL =
+        "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/+esm";
+
+      const MODE_KEY = "barcodeBuddy.mode.v1";
+      const ALLOWED_LENGTHS = [22, 24, 26];
+
+      const numberToBarcodeMode =
+        document.getElementById("numberToBarcodeMode");
+      const barcodeToNumberMode =
+        document.getElementById("barcodeToNumberMode");
+      const actionGrid =
+        document.getElementById("actionGrid");
+      const takePhotoButton =
+        document.getElementById("takePhotoButton");
+      const openNumberButton =
+        document.getElementById("openNumberButton");
+      const cameraInput =
+        document.getElementById("cameraInput");
+      const photoPanel =
+        document.getElementById("photoPanel");
+      const photoPreview =
+        document.getElementById("photoPreview");
+      const photoStatus =
+        document.getElementById("photoStatus");
+      const progressTrack =
+        document.getElementById("progressTrack");
+      const progressBar =
+        document.getElementById("progressBar");
+      const cancelPhotoButton =
+        document.getElementById("cancelPhotoButton");
+      const readResultPanel =
+        document.getElementById("readResultPanel");
+      const readBarcodeNumber =
+        document.getElementById("readBarcodeNumber");
+      const copyReadNumberButton =
+        document.getElementById("copyReadNumberButton");
+      const clearReadNumberButton =
+        document.getElementById("clearReadNumberButton");
+
+      let mode = "numberToBarcode";
+      let reversePhotoUrl = "";
+
+      function isAllowedLength(length) {
+        return ALLOWED_LENGTHS.includes(length);
+      }
+
+      function groupNumber(value) {
+        return String(value || "")
+          .replace(/(.{4})/g, "$1 ")
+          .trim();
+      }
+
+      function setReverseStatus(message, progress = null) {
+        photoStatus.textContent = message;
+
+        if (typeof progress === "number") {
+          progressTrack.hidden = false;
+          progressBar.style.width =
+            `${Math.max(0, Math.min(100, progress))}%`;
+        } else {
+          progressTrack.hidden = true;
+          progressBar.style.width = "0%";
+        }
+      }
+
+      function clearReversePhoto() {
+        if (reversePhotoUrl) {
+          URL.revokeObjectURL(reversePhotoUrl);
+          reversePhotoUrl = "";
+        }
+
+        photoPreview.removeAttribute("src");
+        photoPanel.hidden = true;
+        document.body.classList.remove("input-open");
+        setReverseStatus("");
+      }
+
+      function clearReadResult() {
+        readBarcodeNumber.textContent = "";
+        readResultPanel.hidden = true;
+      }
+
+      function showReadResult(number) {
+        readBarcodeNumber.textContent = groupNumber(number);
+        readResultPanel.hidden = false;
+
+        requestAnimationFrame(() => {
+          readBarcodeNumber.scrollLeft = 0;
+          readResultPanel.scrollIntoView({
+            behavior: "smooth",
+            block: "nearest"
+          });
+        });
+      }
+
+      function extractPostalNumber(rawValue) {
+        const raw = String(rawValue || "")
+          .replace(/^\]C1/, "")
+          .replace(/\u001d/g, "|");
+
+        // Safest case: the barcode itself is only the numeric tracking value.
+        const compact = raw.replace(/\s+/g, "");
+
+        if (
+          /^\d+$/.test(compact) &&
+          isAllowedLength(compact.length)
+        ) {
+          return compact;
+        }
+
+        // GS1 Code 128 can contain separated data fields. Accept a field only
+        // when that individual field is exactly one of our allowed lengths.
+        const fields = raw
+          .split("|")
+          .map((field) => field.replace(/\D/g, ""))
+          .filter(Boolean);
+
+        const exactField = fields.find((field) =>
+          isAllowedLength(field.length)
+        );
+
+        if (exactField) {
+          return exactField;
+        }
+
+        // Finally, accept a clearly bounded numeric run of an allowed length.
+        // We deliberately do NOT trim a longer number because that could pull
+        // routing/account data or another shipper's identifier.
+        for (const length of [26, 24, 22]) {
+          const pattern =
+            new RegExp(`(?:^|\\D)(\\d{${length}})(?!\\d)`);
+          const match = raw.match(pattern);
+
+          if (match) {
+            return match[1];
+          }
+        }
+
+        return "";
+      }
+
+      async function decodeNative(image) {
+        if (!("BarcodeDetector" in window)) {
+          return "";
+        }
+
+        try {
+          const supported =
+            typeof BarcodeDetector.getSupportedFormats === "function"
+              ? await BarcodeDetector.getSupportedFormats()
+              : ["code_128"];
+
+          if (!supported.includes("code_128")) {
+            return "";
+          }
+
+          const detector =
+            new BarcodeDetector({ formats: ["code_128"] });
+          const results = await detector.detect(image);
+
+          for (const result of results || []) {
+            const number = extractPostalNumber(result.rawValue);
+
+            if (number) {
+              return number;
+            }
+          }
+
+          return "";
+        } catch (error) {
+          console.warn("Native Code 128 reading failed.", error);
+          return "";
+        }
+      }
+
+      async function decodeZxing(image) {
+        try {
+          const [
+            { BrowserMultiFormatReader },
+            { BarcodeFormat, DecodeHintType }
+          ] = await Promise.all([
+            import(ZXING_BROWSER_URL),
+            import(ZXING_LIBRARY_URL)
+          ]);
+
+          const hints = new Map();
+          hints.set(
+            DecodeHintType.POSSIBLE_FORMATS,
+            [BarcodeFormat.CODE_128]
+          );
+          hints.set(DecodeHintType.TRY_HARDER, true);
+
+          const reader = new BrowserMultiFormatReader(hints);
+          const result = await reader.decodeFromImageElement(image);
+
+          if (
+            result?.getBarcodeFormat?.() !== BarcodeFormat.CODE_128
+          ) {
+            return "";
+          }
+
+          return extractPostalNumber(result?.getText?.() || "");
+        } catch (error) {
+          console.warn("ZXing Code 128 reading failed.", error);
+          return "";
+        }
+      }
+
+      async function processBarcodeOnlyPhoto(file) {
+        if (!file) {
+          return;
+        }
+
+        clearReadResult();
+        clearReversePhoto();
+
+        reversePhotoUrl = URL.createObjectURL(file);
+        photoPreview.src = reversePhotoUrl;
+        photoPanel.hidden = false;
+        document.body.classList.add("input-open");
+        setReverseStatus("Loading barcode photo…", 6);
+
+        try {
+          await photoPreview.decode();
+
+          setReverseStatus("Reading Code 128 barcode…", 28);
+
+          let number = await decodeNative(photoPreview);
+
+          if (!number) {
+            setReverseStatus("Looking more closely at the barcode…", 56);
+            number = await decodeZxing(photoPreview);
+          }
+
+          clearReversePhoto();
+
+          if (number) {
+            showReadResult(number);
+
+            const toast = document.getElementById("toast");
+            toast.textContent = "Barcode number found";
+            toast.classList.add("show");
+            window.setTimeout(
+              () => toast.classList.remove("show"),
+              2200
+            );
+          } else {
+            const toast = document.getElementById("toast");
+            toast.textContent =
+              "No 22, 24, or 26 digit Code 128 number was found";
+            toast.classList.add("show");
+            window.setTimeout(
+              () => toast.classList.remove("show"),
+              3000
+            );
+          }
+        } catch (error) {
+          console.error(error);
+          clearReversePhoto();
+
+          const toast = document.getElementById("toast");
+          toast.textContent =
+            "That barcode could not be read. Try a closer, straighter photo.";
+          toast.classList.add("show");
+          window.setTimeout(
+            () => toast.classList.remove("show"),
+            3000
+          );
+        } finally {
+          cameraInput.value = "";
+        }
+      }
+
+      function applyMode(nextMode) {
+        mode =
+          nextMode === "barcodeToNumber"
+            ? "barcodeToNumber"
+            : "numberToBarcode";
+
+        try {
+          localStorage.setItem(MODE_KEY, mode);
+        } catch {
+          // The app still works if storage is unavailable.
+        }
+
+        const reverse = mode === "barcodeToNumber";
+
+        document.body.classList.toggle(
+          "barcode-read-mode",
+          reverse
+        );
+
+        numberToBarcodeMode.classList.toggle("active", !reverse);
+        barcodeToNumberMode.classList.toggle("active", reverse);
+
+        numberToBarcodeMode.setAttribute(
+          "aria-pressed",
+          String(!reverse)
+        );
+        barcodeToNumberMode.setAttribute(
+          "aria-pressed",
+          String(reverse)
+        );
+
+        actionGrid.setAttribute(
+          "aria-label",
+          reverse
+            ? "Read a barcode number from a photo"
+            : "Create a barcode from a number"
+        );
+
+        if (reverse) {
+          openNumberButton.hidden = true;
+          clearReversePhoto();
+          clearReadResult();
+        } else {
+          openNumberButton.hidden = false;
+          clearReversePhoto();
+          clearReadResult();
+        }
+      }
+
+      async function copyReadNumber() {
+        const number =
+          readBarcodeNumber.textContent.replace(/\D/g, "");
+
+        if (!number) {
+          return;
+        }
+
+        try {
+          await navigator.clipboard.writeText(number);
+        } catch {
+          const helper = document.createElement("textarea");
+          helper.value = number;
+          helper.style.position = "fixed";
+          helper.style.opacity = "0";
+          document.body.appendChild(helper);
+          helper.select();
+          document.execCommand("copy");
+          helper.remove();
+        }
+
+        const toast = document.getElementById("toast");
+        toast.textContent = "Number copied";
+        toast.classList.add("show");
+        window.setTimeout(
+          () => toast.classList.remove("show"),
+          1800
+        );
+      }
+
+      numberToBarcodeMode.addEventListener("click", () => {
+        applyMode("numberToBarcode");
+      });
+
+      barcodeToNumberMode.addEventListener("click", () => {
+        applyMode("barcodeToNumber");
+      });
+
+      /*
+        In Barcode → Number mode, intercept Take Photo before the existing
+        app.js listener. That keeps the slow OCR reader from loading because
+        reverse mode only needs Code 128 decoding.
+      */
+      takePhotoButton.addEventListener(
+        "click",
+        (event) => {
+          if (mode !== "barcodeToNumber") {
+            return;
+          }
+
+          event.stopImmediatePropagation();
+          cameraInput.click();
+        },
+        true
+      );
+
+      /*
+        Intercept the selected photo before app.js can run its normal
+        Number → Barcode workflow.
+      */
+      cameraInput.addEventListener(
+        "change",
+        (event) => {
+          if (mode !== "barcodeToNumber") {
+            return;
+          }
+
+          event.stopImmediatePropagation();
+          void processBarcodeOnlyPhoto(
+            cameraInput.files?.[0]
+          );
+        },
+        true
+      );
+
+      cancelPhotoButton.addEventListener(
+        "click",
+        (event) => {
+          if (mode !== "barcodeToNumber") {
+            return;
+          }
+
+          event.stopImmediatePropagation();
+          clearReversePhoto();
+          cameraInput.value = "";
+        },
+        true
+      );
+
+      copyReadNumberButton.addEventListener(
+        "click",
+        copyReadNumber
+      );
+
+      clearReadNumberButton.addEventListener("click", () => {
+        clearReadResult();
+      });
+
+      try {
+        applyMode(localStorage.getItem(MODE_KEY));
+      } catch {
+        applyMode("numberToBarcode");
+      }
+    })();
+  </script>
+
+</body>
+</html>
