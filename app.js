@@ -7,9 +7,12 @@ const ALLOWED_BARCODE_LENGTHS = [22, 24, 26];
 const MAX_BARCODE_LENGTH = 26;
 const EXPECTED_GROUP_PATTERNS = [
   [4, 4, 4, 4, 4, 2],
-  [4, 4, 4, 4, 4, 4],
   [4, 4, 4, 4, 4, 4, 2]
 ];
+
+// Photo OCR intentionally targets only the two USPS-style lengths we use
+// here. Manual entry keeps its existing length rules.
+const PHOTO_BARCODE_LENGTHS = [26, 22];
 
 function isAllowedBarcodeLength(length) {
   return ALLOWED_BARCODE_LENGTHS.includes(length);
@@ -372,53 +375,147 @@ function normalizeOcrGroup(group) {
     .join("");
 }
 
-function patternFromOcrLine(line) {
-  const trimmed = String(line || "").trim();
+function isPhotoBarcodeLength(length) {
+  return PHOTO_BARCODE_LENGTHS.includes(length);
+}
 
-  if (!trimmed) {
-    return "";
-  }
-
-  // Reject ordinary address/text lines. Only common OCR digit confusions,
-  // digits, spaces, and separators are allowed.
-  if (/[^0-9OoQDIil|!ZSsGgBb\s\-_.]/.test(trimmed)) {
-    return "";
-  }
-
-  const groups = trimmed
+function normalizeOcrGroups(line) {
+  return String(line || "")
+    .trim()
     .split(/\s+/)
     .map(normalizeOcrGroup)
     .filter(Boolean);
+}
 
-  for (const groupPattern of EXPECTED_GROUP_PATTERNS) {
-    if (groups.length !== groupPattern.length) {
-      continue;
+function isOcrNumberLine(line) {
+  const trimmed = String(line || "").trim();
+
+  if (!trimmed) {
+    return false;
+  }
+
+  // Reject ordinary label text. OCR is allowed to use the common character
+  // confusions that normalizeOcrCharacter() knows how to correct.
+  return !/[^0-9OoQDIil|!ZSsGgBb\s\-_.]/.test(trimmed);
+}
+
+function build26DigitCandidate(groups) {
+  if (!groups.length) {
+    return "";
+  }
+
+  // Some USPS labels print the entire number without spaces. A complete
+  // 26-digit run is still a valid 26-digit candidate.
+  const allDigits = groups.join("");
+  if (allDigits.length === 26) {
+    return allDigits;
+  }
+
+  // When OCR gives one unbroken 25-digit run, we know one character is
+  // missing but cannot determine its exact position from text alone. Keep the
+  // candidate in the 26-digit path and place the unknown in the final six
+  // digits rather than falling back to a false 22-digit match.
+  if (groups.length === 1 && allDigits.length === 25) {
+    return allDigits.slice(0, 21) + "?" + allDigits.slice(21);
+  }
+
+  if (groups.length < 6) {
+    return "";
+  }
+
+  const firstTwentyGroups = groups.slice(0, 5);
+  if (firstTwentyGroups.some((group) => group.length !== 4)) {
+    return "";
+  }
+
+  const prefix = firstTwentyGroups.join("");
+  const tailGroups = groups.slice(5);
+  const tail = tailGroups.join("");
+
+  if (tail.length === 6) {
+    return prefix + tail;
+  }
+
+  if (tail.length !== 5) {
+    return "";
+  }
+
+  // The final six USPS digits are displayed as XXXX XX. If OCR sees only
+  // five of those digits, place the missing digit so that the visible group
+  // boundaries become the expected 4+2 pattern. For the supplied label,
+  // OCR sees: 2 | 64 | 33 -> 2?64 | 33.
+  const possibleInsertionIndexes = [];
+
+  // Prefer an insertion that makes the first four-digit group end exactly at
+  // an OCR group boundary after the insertion.
+  let consumed = 0;
+  for (let i = 0; i < tailGroups.length; i += 1) {
+    consumed += tailGroups[i].length;
+    if (consumed === 3) {
+      possibleInsertionIndexes.push(3);
     }
-
-    const rebuilt = groups.map((group, index) => {
-      const expected = groupPattern[index];
-
-      if (group.length > expected || group.length < expected - 1) {
-        return "";
-      }
-
-      return group.padEnd(expected, "?");
-    });
-
-    const candidate = rebuilt.every(Boolean)
-      ? rebuilt.join("")
-      : "";
-
-    if (isAllowedBarcodeLength(candidate.length)) {
-      return candidate;
+    if (consumed === 4) {
+      possibleInsertionIndexes.push(4);
     }
   }
 
-  const compact = normalizeOcrGroup(trimmed.replace(/\s+/g, ""));
+  // In the common 2 | 64 | 33 case, the missing digit belongs between the
+  // first visible digit and the next two-digit group.
+  if (tailGroups.length >= 3 &&
+      tailGroups[0].length === 1 &&
+      tailGroups[1].length === 2 &&
+      tailGroups[2].length === 2) {
+    return prefix + tail.slice(0, 1) + "?" + tail.slice(1);
+  }
 
-  return isAllowedBarcodeLength(compact.length)
-    ? compact
-    : "";
+  // Otherwise, preserve the OCR order and insert the missing digit at the
+  // boundary that best fits XXXX XX.
+  const insertionIndex = possibleInsertionIndexes[0] ?? 3;
+  return prefix +
+    tail.slice(0, insertionIndex) +
+    "?" +
+    tail.slice(insertionIndex);
+}
+
+function build22DigitCandidate(groups) {
+  if (!groups.length) {
+    return "";
+  }
+
+  const compact = groups.join("");
+
+  if (compact.length === 22) {
+    return compact;
+  }
+
+  // If the final digit is unreadable, allow the OCR line to contain one
+  // complete 20-digit prefix plus a single visible final digit.
+  if (compact.length === 21) {
+    return compact.slice(0, 21) + "?";
+  }
+
+  return "";
+}
+
+function patternFromOcrLine(line) {
+  if (!isOcrNumberLine(line)) {
+    return "";
+  }
+
+  const groups = normalizeOcrGroups(line);
+  if (!groups.length) {
+    return "";
+  }
+
+  // Always try 26 first. This prevents a valid-looking first 22 digits from
+  // winning when the same OCR line contains additional USPS digits.
+  const candidate26 = build26DigitCandidate(groups);
+  if (isPhotoBarcodeLength(candidate26.length)) {
+    return candidate26;
+  }
+
+  const candidate22 = build22DigitCandidate(groups);
+  return isPhotoBarcodeLength(candidate22.length) ? candidate22 : "";
 }
 
 function extractBestOcrPattern(text) {
@@ -429,16 +526,11 @@ function extractBestOcrPattern(text) {
 
   const patterns = lines
     .map(patternFromOcrLine)
-    .filter((pattern) => isAllowedBarcodeLength(pattern.length))
+    .filter((pattern) => isPhotoBarcodeLength(pattern.length))
     .sort((a, b) => {
-      // Check USPS-style candidates in the requested order:
-      // 26 digits first, then 22, then 24.
-      const lengthPriority = {
-        26: 0,
-        22: 1,
-        24: 2
-      };
-
+      // 26 is always preferred over 22 for photo OCR. Within the same length,
+      // prefer the pattern requiring fewer unreadable digits.
+      const lengthPriority = { 26: 0, 22: 1 };
       const lengthDifference =
         (lengthPriority[a.length] ?? 99) -
         (lengthPriority[b.length] ?? 99);
@@ -447,9 +539,7 @@ function extractBestOcrPattern(text) {
         return lengthDifference;
       }
 
-      const unknownA = (a.match(/\?/g) || []).length;
-      const unknownB = (b.match(/\?/g) || []).length;
-      return unknownA - unknownB;
+      return countUnknownDigits(a) - countUnknownDigits(b);
     });
 
   return patterns[0] || "";
