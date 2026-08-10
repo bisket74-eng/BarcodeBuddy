@@ -3,16 +3,29 @@ const ZXING_URL =
 const ZXING_LIBRARY_URL =
   "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/+esm";
 
-const ALLOWED_BARCODE_LENGTHS = [22, 24, 26];
-const MAX_BARCODE_LENGTH = 26;
+const MANUAL_BARCODE_LENGTHS = [22, 24, 26];
+const MANUAL_MAX_BARCODE_LENGTH = 26;
+
+// Reverse/photo reading is deliberately broader. USPS numeric identifiers can
+// vary in length, so OCR/barcode reading accepts 20–34 numeric digits.
+const MIN_DETECTED_POSTAL_DIGITS = 20;
+const MAX_DETECTED_POSTAL_DIGITS = 34;
+
 const EXPECTED_GROUP_PATTERNS = [
   [4, 4, 4, 4, 4, 2],
   [4, 4, 4, 4, 4, 4],
   [4, 4, 4, 4, 4, 4, 2]
 ];
 
-function isAllowedBarcodeLength(length) {
-  return ALLOWED_BARCODE_LENGTHS.includes(length);
+function isManualBarcodeLength(length) {
+  return MANUAL_BARCODE_LENGTHS.includes(length);
+}
+
+function isDetectedPostalLength(length) {
+  return (
+    length >= MIN_DETECTED_POSTAL_DIGITS &&
+    length <= MAX_DETECTED_POSTAL_DIGITS
+  );
 }
 
 const elements = {
@@ -60,6 +73,7 @@ let ocrWorkerPromise = null;
 let ocrProgressStage = "Preparing number reader";
 
 const HISTORY_VIEW_KEY = "barcodeBuddyView";
+const MODE_KEY = "barcodeBuddy.mode.v1";
 
 function showToast(message) {
   window.clearTimeout(toastTimer);
@@ -123,7 +137,7 @@ function sanitizeEditableNumber(value) {
     .replace(/[Oo]/g, "0")
     .replace(/[Il]/g, "1")
     .replace(/[^0-9?]/g, "")
-    .slice(0, MAX_BARCODE_LENGTH);
+    .slice(0, MANUAL_MAX_BARCODE_LENGTH);
 }
 
 function updateCurrentNumberStrip() {
@@ -228,7 +242,7 @@ function closeNumberPanel() {
 }
 
 function insertAtCaret(character) {
-  if (numberText.length >= MAX_BARCODE_LENGTH) {
+  if (numberText.length >= MANUAL_MAX_BARCODE_LENGTH) {
     showToast("Barcode numbers are limited to 26 digits");
     return;
   }
@@ -324,10 +338,38 @@ function clearEverything() {
 }
 
 function extractDecodedDigits(text) {
-  const raw = String(text || "").replace(/\u001d/g, "|");
+  const raw = String(text || "")
+    .replace(/^\]C1/, "")
+    .replace(/\u001d/g, "|");
 
-  for (const length of [...ALLOWED_BARCODE_LENGTHS].sort((a, b) => b - a)) {
-    const exactRunPattern = new RegExp(`(?:^|\\D)(\\d{${length}})(?!\\d)`);
+  // First accept the entire Code 128 payload when it is purely numeric.
+  const compact = raw.replace(/\s+/g, "");
+  if (/^\d+$/.test(compact) && isDetectedPostalLength(compact.length)) {
+    return compact;
+  }
+
+  // Then inspect separated Code 128 fields without combining unrelated data.
+  const separatedRuns = raw
+    .split("|")
+    .map((part) => part.replace(/\D/g, ""))
+    .filter(Boolean);
+
+  const exactSeparated = separatedRuns.find((run) =>
+    isDetectedPostalLength(run.length)
+  );
+
+  if (exactSeparated) {
+    return exactSeparated;
+  }
+
+  // Finally look for a clearly bounded 20–34 digit run.
+  for (
+    let length = MAX_DETECTED_POSTAL_DIGITS;
+    length >= MIN_DETECTED_POSTAL_DIGITS;
+    length -= 1
+  ) {
+    const exactRunPattern =
+      new RegExp(`(?:^|\\D)(\\d{${length}})(?!\\d)`);
     const match = raw.match(exactRunPattern);
 
     if (match) {
@@ -335,16 +377,7 @@ function extractDecodedDigits(text) {
     }
   }
 
-  const separatedRuns = raw
-    .split("|")
-    .map((part) => part.replace(/\D/g, ""))
-    .filter(Boolean);
-
-  const exactSeparated = separatedRuns.find((run) =>
-    isAllowedBarcodeLength(run.length)
-  );
-
-  return exactSeparated || "";
+  return "";
 }
 
 function normalizeOcrCharacter(character) {
@@ -379,8 +412,6 @@ function patternFromOcrLine(line) {
     return "";
   }
 
-  // Reject ordinary address/text lines. Only common OCR digit confusions,
-  // digits, spaces, and separators are allowed.
   if (/[^0-9OoQDIil|!ZSsGgBb\s\-_.]/.test(trimmed)) {
     return "";
   }
@@ -390,6 +421,8 @@ function patternFromOcrLine(line) {
     .map(normalizeOcrGroup)
     .filter(Boolean);
 
+  // Preserve the old known USPS-looking grouped formats when OCR gives us
+  // one of them. This continues to support ? placeholders.
   for (const groupPattern of EXPECTED_GROUP_PATTERNS) {
     if (groups.length !== groupPattern.length) {
       continue;
@@ -409,16 +442,22 @@ function patternFromOcrLine(line) {
       ? rebuilt.join("")
       : "";
 
-    if (isAllowedBarcodeLength(candidate.length)) {
+    if (isDetectedPostalLength(candidate.length)) {
       return candidate;
     }
   }
 
+  /*
+   * OCR may put spaces inside a 20–34 digit number. Rejoin only tokens from
+   * the same OCR line; never combine numbers from different lines.
+   */
   const compact = normalizeOcrGroup(trimmed.replace(/\s+/g, ""));
 
-  return isAllowedBarcodeLength(compact.length)
-    ? compact
-    : "";
+  if (isDetectedPostalLength(compact.length)) {
+    return compact;
+  }
+
+  return "";
 }
 
 function extractBestOcrPattern(text) {
@@ -429,11 +468,16 @@ function extractBestOcrPattern(text) {
 
   const patterns = lines
     .map(patternFromOcrLine)
-    .filter((pattern) => isAllowedBarcodeLength(pattern.length))
+    .filter(Boolean)
     .sort((a, b) => {
       const unknownA = (a.match(/\?/g) || []).length;
       const unknownB = (b.match(/\?/g) || []).length;
-      return unknownA - unknownB;
+
+      // Prefer fewer unknowns; if tied, prefer the longer candidate.
+      return (
+        unknownA - unknownB ||
+        b.length - a.length
+      );
     });
 
   return patterns[0] || "";
@@ -456,7 +500,15 @@ async function decodeWithNativeDetector(image) {
 
     const detector = new BarcodeDetector({ formats: ["code_128"] });
     const results = await detector.detect(image);
-    return results?.[0]?.rawValue || "";
+
+    for (const result of results || []) {
+      const digits = extractDecodedDigits(result.rawValue);
+      if (digits) {
+        return digits;
+      }
+    }
+
+    return "";
   } catch (error) {
     console.warn("Native barcode detection failed.", error);
     return "";
@@ -484,7 +536,7 @@ async function decodeWithZxing(image) {
       return "";
     }
 
-    return result?.getText?.() || "";
+    return extractDecodedDigits(result?.getText?.() || "");
   } catch (error) {
     console.warn("ZXing could not decode the Code 128 barcode.", error);
     return "";
@@ -492,8 +544,9 @@ async function decodeWithZxing(image) {
 }
 
 function makeOcrCanvas(image) {
-  const maxWidth = 1350;
-  const maxUpscale = 1.4;
+  const maxWidth = 1500;
+  const maxUpscale = 1.5;
+
   const scale = Math.min(
     maxUpscale,
     maxWidth / Math.max(1, image.naturalWidth)
@@ -518,8 +571,6 @@ function makeOcrCanvas(image) {
       data[index + 1] * 0.587 +
       data[index + 2] * 0.114;
 
-    // Moderate contrast is faster and preserves faint printed digits better
-    // than the previous very strong enlargement and thresholding.
     const contrasted = gray < 145
       ? Math.max(0, gray * 0.68)
       : Math.min(255, 178 + (gray - 145) * 1.42);
@@ -589,13 +640,10 @@ function stackOcrRegions(regions) {
 }
 
 function makeFastOcrRegion(fullCanvas) {
-  // The human-readable number is normally under the long package barcode.
-  // Stack the likely middle/lower strips into one image so Tesseract only
-  // performs one recognition pass instead of several separate passes.
   return stackOcrRegions([
-    cropCanvas(fullCanvas, 0.34, 0.22),
-    cropCanvas(fullCanvas, 0.53, 0.22),
-    cropCanvas(fullCanvas, 0.72, 0.19)
+    cropCanvas(fullCanvas, 0.28, 0.24),
+    cropCanvas(fullCanvas, 0.49, 0.25),
+    cropCanvas(fullCanvas, 0.70, 0.24)
   ]);
 }
 
@@ -613,6 +661,7 @@ async function getOcrWorker() {
       logger(message) {
         if (message.status === "recognizing text") {
           const percent = Math.round((message.progress || 0) * 100);
+
           setPhotoStatus(
             `${ocrProgressStage}… ${percent}%`,
             percent
@@ -654,9 +703,18 @@ function chooseBetterPattern(first, second) {
   if (!first) return second || "";
   if (!second) return first;
 
-  return countUnknownDigits(second) < countUnknownDigits(first)
-    ? second
-    : first;
+  const unknownFirst = countUnknownDigits(first);
+  const unknownSecond = countUnknownDigits(second);
+
+  if (unknownSecond < unknownFirst) {
+    return second;
+  }
+
+  if (unknownSecond === unknownFirst && second.length > first.length) {
+    return second;
+  }
+
+  return first;
 }
 
 async function recognizeOcrPattern(worker, canvas, options = {}) {
@@ -683,7 +741,6 @@ async function runOcr(image) {
   const fullCanvas = makeOcrCanvas(image);
   const fastRegion = makeFastOcrRegion(fullCanvas);
 
-  // Fast path: one OCR pass over only the likely number areas.
   let bestPattern = await recognizeOcrPattern(worker, fastRegion, {
     stage: "Reading the likely postal number",
     pageSegmentationMode: "6"
@@ -693,7 +750,6 @@ async function runOcr(image) {
     return bestPattern;
   }
 
-  // Accuracy fallback: only when needed, inspect the whole reduced image once.
   setPhotoStatus("Checking the full picture…", 15);
 
   const fullPattern = await recognizeOcrPattern(worker, fullCanvas, {
@@ -739,13 +795,11 @@ async function processPhoto(file) {
       decoded = await decodeWithZxing(elements.photoPreview);
     }
 
-    const decodedDigits = extractDecodedDigits(decoded);
-
-    if (decodedDigits) {
-      setNumberText(decodedDigits);
+    if (decoded) {
+      setNumberText(decoded);
       closePhotoPanel();
       generateCandidates({ closePanels: true, fromPhoto: true });
-      showToast("Barcode read from photo");
+      showToast("Postal barcode number read from photo");
       return;
     }
 
@@ -760,7 +814,7 @@ async function processPhoto(file) {
       setNumberText(ocrPattern);
       closePhotoPanel();
 
-      const unknownCount = (ocrPattern.match(/\?/g) || []).length;
+      const unknownCount = countUnknownDigits(ocrPattern);
 
       if (unknownCount <= 2) {
         generateCandidates({ closePanels: true, fromPhoto: true });
@@ -854,12 +908,12 @@ function generateCandidates(options = {}) {
   const pattern = sanitizeEditableNumber(numberText);
 
   if (!pattern) {
-    showToast("Enter a tracking number first");
+    showToast("Enter a USPS tracking number first");
     openNumberPanel();
     return;
   }
 
-  if (!isAllowedBarcodeLength(pattern.length)) {
+  if (!isManualBarcodeLength(pattern.length)) {
     showToast(
       "Enter exactly 22, 24, or 26 digits. Use ? for an unreadable digit."
     );
@@ -868,7 +922,7 @@ function generateCandidates(options = {}) {
   }
 
   try {
-    const unknownCount = (pattern.match(/\?/g) || []).length;
+    const unknownCount = countUnknownDigits(pattern);
 
     if (
       unknownCount === 2 &&
@@ -1133,9 +1187,59 @@ function downloadBlob(blob, filename) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1200);
 }
 
+function getMode() {
+  try {
+    return localStorage.getItem(MODE_KEY) || "numberToBarcode";
+  } catch {
+    return "numberToBarcode";
+  }
+}
+
+function applyModeClasses() {
+  const reverse = getMode() === "barcodeToNumber";
+
+  document.body.classList.toggle("barcode-read-mode", reverse);
+
+  const numberMode = document.getElementById("numberToBarcodeMode");
+  const reverseMode = document.getElementById("barcodeToNumberMode");
+
+  if (numberMode && reverseMode) {
+    numberMode.classList.toggle("active", !reverse);
+    reverseMode.classList.toggle("active", reverse);
+    numberMode.setAttribute("aria-pressed", String(!reverse));
+    reverseMode.setAttribute("aria-pressed", String(reverse));
+  }
+
+  if (elements.openNumberButton) {
+    elements.openNumberButton.hidden = reverse;
+  }
+}
+
+document.getElementById("numberToBarcodeMode")?.addEventListener("click", () => {
+  localStorage.setItem(MODE_KEY, "numberToBarcode");
+  applyModeClasses();
+  clearPhotoPanelOnly();
+});
+
+document.getElementById("barcodeToNumberMode")?.addEventListener("click", () => {
+  localStorage.setItem(MODE_KEY, "barcodeToNumber");
+  applyModeClasses();
+  closeNumberPanel();
+  clearPhotoPanelOnly();
+  setNumberText("");
+  candidates = [];
+  renderResults();
+});
+
+function clearPhotoPanelOnly() {
+  elements.photoPanel.hidden = true;
+  updateInputOpenState();
+  releasePhotoUrl();
+  elements.photoPreview.removeAttribute("src");
+  setPhotoStatus("");
+}
+
 elements.takePhotoButton.addEventListener("click", () => {
-  // Warm the OCR engine while the camera is open. This removes much of the
-  // waiting after the picture is taken, especially on the first scan.
   void getOcrWorker().catch((error) => {
     console.warn("The OCR reader could not be preloaded.", error);
   });
@@ -1163,10 +1267,13 @@ elements.currentNumberClearButton.addEventListener("click", (event) => {
 elements.closeNumberButton.addEventListener("click", () => {
   closeHistoryView("number", closeNumberPanel);
 });
+
 elements.cancelPhotoButton.addEventListener("click", () => {
   closeHistoryView("photo", closePhotoPanel);
 });
+
 elements.clearButton.addEventListener("click", clearEverything);
+
 elements.generateButton.addEventListener("click", () => {
   generateCandidates({ closePanels: true });
 });
@@ -1227,7 +1334,6 @@ window.addEventListener("orientationchange", () => {
   }, 180);
 });
 
-
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") {
     return;
@@ -1262,6 +1368,7 @@ if ("serviceWorker" in navigator) {
   });
 }
 
+applyModeClasses();
 renderNumberDisplay();
 updateCurrentNumberStrip();
 renderResults();
