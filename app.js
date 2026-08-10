@@ -3,16 +3,12 @@ const ZXING_URL =
 const ZXING_LIBRARY_URL =
   "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/+esm";
 
-const ALLOWED_BARCODE_LENGTHS = [22, 24, 26];
+const ALLOWED_BARCODE_LENGTHS = [22, 26];
 const MAX_BARCODE_LENGTH = 26;
 const EXPECTED_GROUP_PATTERNS = [
   [4, 4, 4, 4, 4, 2],
   [4, 4, 4, 4, 4, 4, 2]
 ];
-
-// Photo OCR intentionally targets only the two USPS-style lengths we use
-// here. Manual entry keeps its existing length rules.
-const PHOTO_BARCODE_LENGTHS = [26, 22];
 
 function isAllowedBarcodeLength(length) {
   return ALLOWED_BARCODE_LENGTHS.includes(length);
@@ -48,7 +44,14 @@ const elements = {
   previousCandidateButton: document.getElementById("previousCandidateButton"),
   nextCandidateButton: document.getElementById("nextCandidateButton"),
   fullscreenPosition: document.getElementById("fullscreenPosition"),
-  toast: document.getElementById("toast")
+  toast: document.getElementById("toast"),
+  numberToBarcodeMode: document.getElementById("numberToBarcodeMode"),
+  barcodeToNumberMode: document.getElementById("barcodeToNumberMode"),
+  readResultPanel: document.getElementById("readResultPanel"),
+  readBarcodeNumber: document.getElementById("readBarcodeNumber"),
+  copyReadNumberButton: document.getElementById("copyReadNumberButton"),
+  clearReadNumberButton: document.getElementById("clearReadNumberButton"),
+  actionGrid: document.getElementById("actionGrid")
 };
 
 let numberText = "";
@@ -61,8 +64,223 @@ let isClosingFullscreen = false;
 let ocrWorker = null;
 let ocrWorkerPromise = null;
 let ocrProgressStage = "Preparing number reader";
+let appMode = "numberToBarcode";
+const MODE_KEY = "barcodeBuddy.mode.v1";
+let reversePhotoUrl = "";
 
 const HISTORY_VIEW_KEY = "barcodeBuddyView";
+
+
+function clearReversePhoto() {
+  if (reversePhotoUrl) {
+    URL.revokeObjectURL(reversePhotoUrl);
+    reversePhotoUrl = "";
+  }
+
+  elements.photoPreview.removeAttribute("src");
+  elements.photoPanel.hidden = true;
+  document.body.classList.remove("input-open");
+  setPhotoStatus("");
+}
+
+function clearReadResult() {
+  if (elements.readBarcodeNumber) {
+    elements.readBarcodeNumber.textContent = "";
+  }
+  if (elements.readResultPanel) {
+    elements.readResultPanel.hidden = true;
+  }
+}
+
+function showReadResult(number) {
+  if (!elements.readBarcodeNumber || !elements.readResultPanel) {
+    return;
+  }
+
+  elements.readBarcodeNumber.textContent = groupNumber(number);
+  elements.readResultPanel.hidden = false;
+
+  requestAnimationFrame(() => {
+    elements.readBarcodeNumber.scrollLeft = 0;
+    elements.readResultPanel.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest"
+    });
+  });
+}
+
+async function copyReadNumber() {
+  const number = String(
+    elements.readBarcodeNumber?.textContent || ""
+  ).replace(/\D/g, "");
+
+  if (!number) {
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(number);
+  } catch {
+    const helper = document.createElement("textarea");
+    helper.value = number;
+    helper.style.position = "fixed";
+    helper.style.opacity = "0";
+    document.body.appendChild(helper);
+    helper.select();
+    document.execCommand("copy");
+    helper.remove();
+  }
+
+  showToast("Number copied");
+}
+
+function applyAppMode(nextMode) {
+  appMode =
+    nextMode === "barcodeToNumber"
+      ? "barcodeToNumber"
+      : "numberToBarcode";
+
+  try {
+    localStorage.setItem(MODE_KEY, appMode);
+  } catch {}
+
+  const reverse = appMode === "barcodeToNumber";
+
+  document.body.classList.toggle("barcode-read-mode", reverse);
+
+  elements.numberToBarcodeMode?.classList.toggle("active", !reverse);
+  elements.barcodeToNumberMode?.classList.toggle("active", reverse);
+
+  elements.numberToBarcodeMode?.setAttribute(
+    "aria-pressed",
+    String(!reverse)
+  );
+  elements.barcodeToNumberMode?.setAttribute(
+    "aria-pressed",
+    String(reverse)
+  );
+
+  elements.openNumberButton.hidden = reverse;
+
+  clearReversePhoto();
+  clearReadResult();
+
+  if (reverse) {
+    setPhotoStatus("");
+  }
+}
+
+async function processReversePhoto(file) {
+  if (!file) {
+    return;
+  }
+
+  clearReadResult();
+  clearReversePhoto();
+
+  reversePhotoUrl = URL.createObjectURL(file);
+  elements.photoPreview.src = reversePhotoUrl;
+  elements.photoPanel.hidden = false;
+  document.body.classList.add("input-open");
+  setPhotoStatus("Loading barcode photo…", 5);
+
+  try {
+    await elements.photoPreview.decode();
+
+    setPhotoStatus("Reading the barcode…", 25);
+
+    let decoded = await decodeWithNativeDetector(elements.photoPreview);
+    let number = extractDecodedDigits(decoded);
+
+    if (!number) {
+      setPhotoStatus("Looking more closely at the barcode…", 48);
+      decoded = await decodeWithZxing(elements.photoPreview);
+      number = extractDecodedDigits(decoded);
+    }
+
+    if (!number) {
+      setPhotoStatus("Reading the printed number…", 68);
+      number = await runReverseOcr(elements.photoPreview);
+    }
+
+    clearReversePhoto();
+
+    if (number) {
+      showReadResult(number);
+      showToast("Barcode number found");
+    } else {
+      showToast(
+        "I couldn't find a readable barcode number in that photo. Try a closer, straighter photo.",
+        3500
+      );
+    }
+  } catch (error) {
+    console.error(error);
+    clearReversePhoto();
+    showToast(
+      "That barcode could not be read. Try a closer, straighter photo.",
+      3500
+    );
+  } finally {
+    elements.cameraInput.value = "";
+  }
+}
+
+async function runReverseOcr(image) {
+  if (!window.Tesseract?.recognize) {
+    return "";
+  }
+
+  try {
+    const canvas = makeOcrCanvas(image);
+    const regions = [
+      cropCanvas(canvas, 0.40, 0.22),
+      cropCanvas(canvas, 0.48, 0.18),
+      cropCanvas(canvas, 0.56, 0.16)
+    ];
+
+    let best = "";
+
+    for (const region of regions) {
+      const result = await Tesseract.recognize(
+        region,
+        "eng",
+        {
+          logger(info) {
+            if (
+              info?.status === "recognizing text" &&
+              typeof info.progress === "number"
+            ) {
+              setPhotoStatus(
+                `Reading the printed number… ${Math.round(
+                  info.progress * 100
+                )}%`,
+                68 + Math.round(info.progress * 28)
+              );
+            }
+          }
+        }
+      );
+
+      const text = result?.data?.text || "";
+      const runs = text
+        .split(/[^0-9]+/)
+        .map((value) => value.trim())
+        .filter((value) => value.length >= 20 && value.length <= 34);
+
+      for (const run of runs) {
+        if (!best || run.length > best.length) {
+          best = run;
+        }
+      }
+    }
+
+    return best;
+  } catch (error) {
+    console.warn("Reverse OCR failed.", error);
+    return "";
+  }
+}
 
 function showToast(message) {
   window.clearTimeout(toastTimer);
@@ -367,6 +585,7 @@ function normalizeOcrCharacter(character) {
   return map[character] || "?";
 }
 
+
 function normalizeOcrGroup(group) {
   return String(group || "")
     .split("")
@@ -375,147 +594,133 @@ function normalizeOcrGroup(group) {
     .join("");
 }
 
-function isPhotoBarcodeLength(length) {
-  return PHOTO_BARCODE_LENGTHS.includes(length);
-}
-
-function normalizeOcrGroups(line) {
-  return String(line || "")
-    .trim()
-    .split(/\s+/)
-    .map(normalizeOcrGroup)
-    .filter(Boolean);
-}
-
-function isOcrNumberLine(line) {
+function parseOcrLineCandidate(line) {
   const trimmed = String(line || "").trim();
 
   if (!trimmed) {
-    return false;
+    return null;
   }
 
-  // Reject ordinary label text. OCR is allowed to use the common character
-  // confusions that normalizeOcrCharacter() knows how to correct.
-  return !/[^0-9OoQDIil|!ZSsGgBb\s\-_.]/.test(trimmed);
-}
-
-function build26DigitCandidate(groups) {
-  if (!groups.length) {
-    return "";
+  // Only permit characters that can plausibly belong to a numeric tracking
+  // number. We deliberately do not turn arbitrary text into question marks.
+  if (/[^0-9OoQDIil|!ZSsGgBb\s\-_.]/.test(trimmed)) {
+    return null;
   }
 
-  // Some USPS labels print the entire number without spaces. A complete
-  // 26-digit run is still a valid 26-digit candidate.
-  const allDigits = groups.join("");
-  if (allDigits.length === 26) {
-    return allDigits;
+  const groups = trimmed
+    .split(/\s+/)
+    .map(normalizeOcrGroup)
+    .filter(Boolean);
+
+  const lengths = groups.map((group) => group.length);
+
+  // Normal 22-digit USPS-style presentation: 4-4-4-4-4-2.
+  if (
+    lengths.length === 6 &&
+    lengths.every((length, index) => length === [4, 4, 4, 4, 4, 2][index])
+  ) {
+    return {
+      pattern: groups.join(""),
+      score: 120,
+      kind: "22-grouped"
+    };
   }
 
-  // When OCR gives one unbroken 25-digit run, we know one character is
-  // missing but cannot determine its exact position from text alone. Keep the
-  // candidate in the 26-digit path and place the unknown in the final six
-  // digits rather than falling back to a false 22-digit match.
-  if (groups.length === 1 && allDigits.length === 25) {
-    return allDigits.slice(0, 21) + "?" + allDigits.slice(21);
+  // Normal 26-digit USPS-style presentation: 4-4-4-4-4-4-2.
+  if (
+    lengths.length === 7 &&
+    lengths.every((length, index) => length === [4, 4, 4, 4, 4, 4, 2][index])
+  ) {
+    return {
+      pattern: groups.join(""),
+      score: 150,
+      kind: "26-grouped"
+    };
   }
 
-  if (groups.length < 6) {
-    return "";
-  }
+  /*
+    Important case from the user's label.
 
-  const firstTwentyGroups = groups.slice(0, 5);
-  if (firstTwentyGroups.some((group) => group.length !== 4)) {
-    return "";
-  }
+    A 26-digit number with one unreadable digit can be OCR'd as:
+      9261 2903 6172 2458 1949 2 64 33
 
-  const prefix = firstTwentyGroups.join("");
-  const tailGroups = groups.slice(5);
-  const tail = tailGroups.join("");
+    That is 25 observed digits, but the tail grouping tells us the missing
+    character is inside the fourth group of the tail: 2?64, followed by 33.
+    This is the one situation where we intentionally insert a ?.
+  */
+  if (
+    lengths.length === 8 &&
+    lengths[0] === 4 &&
+    lengths[1] === 4 &&
+    lengths[2] === 4 &&
+    lengths[3] === 4 &&
+    lengths[4] === 4 &&
+    lengths[5] === 1 &&
+    lengths[6] === 2 &&
+    lengths[7] === 2
+  ) {
+    const pattern =
+      groups.slice(0, 5).join("") +
+      groups[5] +
+      "?" +
+      groups[6] +
+      groups[7];
 
-  if (tail.length === 6) {
-    return prefix + tail;
-  }
-
-  if (tail.length !== 5) {
-    return "";
-  }
-
-  // The final six USPS digits are displayed as XXXX XX. If OCR sees only
-  // five of those digits, place the missing digit so that the visible group
-  // boundaries become the expected 4+2 pattern. For the supplied label,
-  // OCR sees: 2 | 64 | 33 -> 2?64 | 33.
-  const possibleInsertionIndexes = [];
-
-  // Prefer an insertion that makes the first four-digit group end exactly at
-  // an OCR group boundary after the insertion.
-  let consumed = 0;
-  for (let i = 0; i < tailGroups.length; i += 1) {
-    consumed += tailGroups[i].length;
-    if (consumed === 3) {
-      possibleInsertionIndexes.push(3);
+    if (pattern.length === 26) {
+      return {
+        pattern,
+        score: 190,
+        kind: "26-one-missing-tail"
+      };
     }
-    if (consumed === 4) {
-      possibleInsertionIndexes.push(4);
+  }
+
+  // Same missing-digit structure when OCR inserts a separator before/after
+  // the missing position differently.
+  if (
+    lengths.length === 7 &&
+    lengths.slice(0, 5).every((length) => length === 4) &&
+    lengths[5] === 3 &&
+    lengths[6] === 2 &&
+    groups[5].length === 3
+  ) {
+    const tail = groups[5];
+    const pattern =
+      groups.slice(0, 5).join("") +
+      tail[0] +
+      "?" +
+      tail.slice(1) +
+      groups[6];
+
+    if (pattern.length === 26) {
+      return {
+        pattern,
+        score: 185,
+        kind: "26-one-missing-tail"
+      };
     }
   }
 
-  // In the common 2 | 64 | 33 case, the missing digit belongs between the
-  // first visible digit and the next two-digit group.
-  if (tailGroups.length >= 3 &&
-      tailGroups[0].length === 1 &&
-      tailGroups[1].length === 2 &&
-      tailGroups[2].length === 2) {
-    return prefix + tail.slice(0, 1) + "?" + tail.slice(1);
+  // Compact 22/26-digit OCR result. This is intentionally lower confidence
+  // than a properly grouped line because it is easier for OCR to hallucinate.
+  const compact = normalizeOcrGroup(trimmed.replace(/\s+/g, ""));
+  if (compact.length === 26) {
+    return {
+      pattern: compact,
+      score: 90,
+      kind: "26-compact"
+    };
   }
-
-  // Otherwise, preserve the OCR order and insert the missing digit at the
-  // boundary that best fits XXXX XX.
-  const insertionIndex = possibleInsertionIndexes[0] ?? 3;
-  return prefix +
-    tail.slice(0, insertionIndex) +
-    "?" +
-    tail.slice(insertionIndex);
-}
-
-function build22DigitCandidate(groups) {
-  if (!groups.length) {
-    return "";
-  }
-
-  const compact = groups.join("");
 
   if (compact.length === 22) {
-    return compact;
+    return {
+      pattern: compact,
+      score: 80,
+      kind: "22-compact"
+    };
   }
 
-  // If the final digit is unreadable, allow the OCR line to contain one
-  // complete 20-digit prefix plus a single visible final digit.
-  if (compact.length === 21) {
-    return compact.slice(0, 21) + "?";
-  }
-
-  return "";
-}
-
-function patternFromOcrLine(line) {
-  if (!isOcrNumberLine(line)) {
-    return "";
-  }
-
-  const groups = normalizeOcrGroups(line);
-  if (!groups.length) {
-    return "";
-  }
-
-  // Always try 26 first. This prevents a valid-looking first 22 digits from
-  // winning when the same OCR line contains additional USPS digits.
-  const candidate26 = build26DigitCandidate(groups);
-  if (isPhotoBarcodeLength(candidate26.length)) {
-    return candidate26;
-  }
-
-  const candidate22 = build22DigitCandidate(groups);
-  return isPhotoBarcodeLength(candidate22.length) ? candidate22 : "";
+  return null;
 }
 
 function extractBestOcrPattern(text) {
@@ -524,25 +729,23 @@ function extractBestOcrPattern(text) {
     .map((line) => line.trim())
     .filter(Boolean);
 
-  const patterns = lines
-    .map(patternFromOcrLine)
-    .filter((pattern) => isPhotoBarcodeLength(pattern.length))
-    .sort((a, b) => {
-      // 26 is always preferred over 22 for photo OCR. Within the same length,
-      // prefer the pattern requiring fewer unreadable digits.
-      const lengthPriority = { 26: 0, 22: 1 };
-      const lengthDifference =
-        (lengthPriority[a.length] ?? 99) -
-        (lengthPriority[b.length] ?? 99);
+  const candidates = lines
+    .map(parseOcrLineCandidate)
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score);
 
-      if (lengthDifference !== 0) {
-        return lengthDifference;
-      }
+  return candidates[0]?.pattern || "";
+}
 
-      return countUnknownDigits(a) - countUnknownDigits(b);
-    });
+function collectOcrPatterns(text) {
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
 
-  return patterns[0] || "";
+  return lines
+    .map(parseOcrLineCandidate)
+    .filter(Boolean);
 }
 
 async function decodeWithNativeDetector(image) {
@@ -598,8 +801,8 @@ async function decodeWithZxing(image) {
 }
 
 function makeOcrCanvas(image) {
-  const maxWidth = 1350;
-  const maxUpscale = 1.4;
+  const maxWidth = 2200;
+  const maxUpscale = 3.0;
   const scale = Math.min(
     maxUpscale,
     maxWidth / Math.max(1, image.naturalWidth)
@@ -694,15 +897,38 @@ function stackOcrRegions(regions) {
   return canvas;
 }
 
-function makeFastOcrRegion(fullCanvas) {
-  // The human-readable number is normally under the long package barcode.
-  // Stack the likely middle/lower strips into one image so Tesseract only
-  // performs one recognition pass instead of several separate passes.
-  return stackOcrRegions([
-    cropCanvas(fullCanvas, 0.34, 0.22),
-    cropCanvas(fullCanvas, 0.53, 0.22),
-    cropCanvas(fullCanvas, 0.72, 0.19)
-  ]);
+
+function rotateCanvas(source, degrees) {
+  const radians = (degrees * Math.PI) / 180;
+  const sin = Math.abs(Math.sin(radians));
+  const cos = Math.abs(Math.cos(radians));
+
+  const width = Math.ceil(source.width * cos + source.height * sin);
+  const height = Math.ceil(source.width * sin + source.height * cos);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+
+  const context = canvas.getContext("2d");
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, width, height);
+  context.translate(width / 2, height / 2);
+  context.rotate(radians);
+  context.drawImage(source, -source.width / 2, -source.height / 2);
+
+  return canvas;
+}
+
+function makePostalNumberRegions(image) {
+  const full = makeOcrCanvas(image);
+
+  // The printed tracking number is normally immediately beneath the long
+  // package barcode. Keep the OCR window narrow so it doesn't read ZIP codes,
+  // addresses, UPS text, or the other barcode labels on the package.
+  const base = cropCanvas(full, 0.43, 0.15);
+
+  return [-3, 0, 3].map((degrees) => rotateCanvas(base, degrees));
 }
 
 async function getOcrWorker() {
@@ -784,31 +1010,64 @@ async function recognizeOcrPattern(worker, canvas, options = {}) {
   return extractBestOcrPattern(result?.data?.text || "");
 }
 
+
 async function runOcr(image) {
   const worker = await getOcrWorker();
-  const fullCanvas = makeOcrCanvas(image);
-  const fastRegion = makeFastOcrRegion(fullCanvas);
+  const regions = makePostalNumberRegions(image);
+  const allCandidates = [];
 
-  // Fast path: one OCR pass over only the likely number areas.
-  let bestPattern = await recognizeOcrPattern(worker, fastRegion, {
-    stage: "Reading the likely postal number",
-    pageSegmentationMode: "6"
-  });
+  // Three deskew passes over the tight number line are considerably more
+  // reliable than OCR'ing the entire package label.
+  for (let index = 0; index < regions.length; index += 1) {
+    const patternCandidates = await recognizeOcrCandidates(
+      worker,
+      regions[index],
+      {
+        stage: "Reading the postal number",
+        pageSegmentationMode: "7"
+      }
+    );
 
-  if (bestPattern && countUnknownDigits(bestPattern) <= 2) {
-    return bestPattern;
+    allCandidates.push(...patternCandidates);
+
+    // A strong 26-digit line with the inferred missing digit wins immediately.
+    if (
+      patternCandidates.some(
+        (candidate) => candidate.kind === "26-one-missing-tail"
+      )
+    ) {
+      const best = patternCandidates.find(
+        (candidate) => candidate.kind === "26-one-missing-tail"
+      );
+      return best.pattern;
+    }
   }
 
-  // Accuracy fallback: only when needed, inspect the whole reduced image once.
-  setPhotoStatus("Checking the full picture…", 15);
+  if (!allCandidates.length) {
+    return "";
+  }
 
-  const fullPattern = await recognizeOcrPattern(worker, fullCanvas, {
-    stage: "Checking the full picture",
-    pageSegmentationMode: "11"
+  allCandidates.sort((a, b) => b.score - a.score);
+  return allCandidates[0].pattern;
+}
+
+async function recognizeOcrCandidates(worker, canvas, options = {}) {
+  const {
+    stage = "Reading the postal number",
+    pageSegmentationMode = "7"
+  } = options;
+
+  ocrProgressStage = stage;
+
+  await worker.setParameters({
+    tessedit_char_whitelist:
+      "0123456789OoQDIil|!ZSsGgBb -_.",
+    preserve_interword_spaces: "1",
+    tessedit_pageseg_mode: pageSegmentationMode
   });
 
-  bestPattern = chooseBetterPattern(bestPattern, fullPattern);
-  return bestPattern;
+  const result = await worker.recognize(canvas);
+  return collectOcrPatterns(result?.data?.text || "");
 }
 
 async function processPhoto(file) {
@@ -885,7 +1144,7 @@ async function processPhoto(file) {
 
     closePhotoPanel();
     openNumberPanel({ historyMode: "replace" });
-    showToast("The photo could not be read. Enter the number below.");
+    showToast("The postal number could not be read. Try a closer, straighter photo.");
   } catch (error) {
     console.error(error);
     closePhotoPanel();
@@ -967,7 +1226,7 @@ function generateCandidates(options = {}) {
 
   if (!isAllowedBarcodeLength(pattern.length)) {
     showToast(
-      "Enter exactly 22, 24, or 26 digits. Use ? for an unreadable digit."
+      "Enter exactly 22 or 26 digits for postal barcode reconstruction. Use ? for an unreadable digit."
     );
     openNumberPanel();
     return;
@@ -1240,6 +1499,11 @@ function downloadBlob(blob, filename) {
 }
 
 elements.takePhotoButton.addEventListener("click", () => {
+  if (appMode === "barcodeToNumber") {
+    elements.cameraInput.click();
+    return;
+  }
+
   // Warm the OCR engine while the camera is open. This removes much of the
   // waiting after the picture is taken, especially on the first scan.
   void getOcrWorker().catch((error) => {
@@ -1248,6 +1512,17 @@ elements.takePhotoButton.addEventListener("click", () => {
 
   elements.cameraInput.click();
 });
+
+elements.numberToBarcodeMode?.addEventListener("click", () => {
+  applyAppMode("numberToBarcode");
+});
+
+elements.barcodeToNumberMode?.addEventListener("click", () => {
+  applyAppMode("barcodeToNumber");
+});
+
+elements.copyReadNumberButton?.addEventListener("click", copyReadNumber);
+elements.clearReadNumberButton?.addEventListener("click", clearReadResult);
 
 elements.openNumberButton.addEventListener("click", () => {
   if (elements.numberPanel.hidden) {
@@ -1278,7 +1553,14 @@ elements.generateButton.addEventListener("click", () => {
 });
 
 elements.cameraInput.addEventListener("change", () => {
-  processPhoto(elements.cameraInput.files?.[0]);
+  const file = elements.cameraInput.files?.[0];
+
+  if (appMode === "barcodeToNumber") {
+    void processReversePhoto(file);
+    return;
+  }
+
+  void processPhoto(file);
 });
 
 document.querySelectorAll("[data-key]").forEach((button) => {
@@ -1366,6 +1648,12 @@ if ("serviceWorker" in navigator) {
       console.warn("Service worker registration failed.", error);
     });
   });
+}
+
+try {
+  applyAppMode(localStorage.getItem(MODE_KEY));
+} catch {
+  applyAppMode("numberToBarcode");
 }
 
 renderNumberDisplay();
