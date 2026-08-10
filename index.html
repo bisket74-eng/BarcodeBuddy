@@ -6,38 +6,36 @@
 <meta name="theme-color" content="#003b6f">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="description" content="Barcode Buddy helps recreate an existing package barcode from a photo or tracking number.">
+<meta name="description" content="Barcode Buddy reads a package barcode or a printed tracking number and rebuilds the barcode.">
 <title>Barcode Buddy</title>
 <link rel="manifest" href="./manifest.json">
 <link rel="icon" href="./icon-192.png">
 <link rel="apple-touch-icon" href="./icon-192.png">
-<link rel="stylesheet" href="./styles.css">
+<link rel="stylesheet" href="./styles.css?v=4">
 <script defer src="https://cdn.jsdelivr.net/npm/bwip-js@4.10.2/dist/bwip-js-min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js"></script>
-<script type="module" src="./app.js"></script>
+<script type="module" src="./app.js?v=4"></script>
 <style>
-/* The hero sits below the switch so its shadow can never swallow a tap. */
-.hero{position:relative;z-index:1}
-.mode-switch{position:relative;z-index:30;display:grid;grid-template-columns:1fr 1fr;gap:5px;width:min(100%,430px);margin:6px auto 15px;padding:4px;border:1px solid rgba(0,103,169,.16);border-radius:14px;background:rgba(255,255,255,.94);box-shadow:0 7px 18px rgba(0,53,96,.08);pointer-events:auto}
-.mode-option{position:relative;z-index:1;min-height:44px;padding:7px 8px;border:0;border-radius:10px;color:var(--muted);background:transparent;cursor:pointer;font-size:clamp(.73rem,3.2vw,.84rem);font-weight:900;white-space:nowrap;pointer-events:auto;touch-action:manipulation;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none}
-.mode-option.active{color:#fff;background:linear-gradient(135deg,var(--navy),var(--blue-bright));box-shadow:0 5px 12px rgba(0,103,169,.19)}
-.mode-option:focus-visible{outline:3px solid var(--blue-bright);outline-offset:2px}
-body.barcode-read-mode .action-grid{grid-template-columns:1fr}body.barcode-read-mode #openNumberButton,body.barcode-read-mode #currentNumberStrip,body.barcode-read-mode #resultsSection,body.barcode-read-mode #notice,body.barcode-read-mode #numberPanel{display:none!important}body:not(.barcode-read-mode) #readResultPanel{display:none!important}body.input-open #readResultPanel{display:none!important}
-.read-result-panel{margin:0 0 15px;padding:11px;border:1px solid rgba(0,103,169,.17);border-radius:14px;background:rgba(255,255,255,.9);box-shadow:0 6px 16px rgba(0,53,96,.08)}.read-result-panel[hidden]{display:none}.read-result-heading{margin:0 0 7px 2px;color:var(--muted);font-size:.74rem;font-weight:900}.read-result-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:6px}.read-barcode-number{min-width:0;overflow-x:auto;padding:7px 4px;color:var(--ink);white-space:nowrap;scrollbar-width:none;font-size:clamp(.78rem,3.25vw,.93rem);font-weight:900;letter-spacing:.025em}.read-barcode-number::-webkit-scrollbar{display:none}.read-copy-button,.read-clear-button{min-height:32px;padding:5px 9px;border:0;border-radius:8px;cursor:pointer;font-size:.72rem;font-weight:900}.read-copy-button{color:#fff;background:var(--blue)}.read-clear-button{color:var(--danger);background:#fff0f2}
-@media(max-width:350px){.mode-option{font-size:.68rem;padding-left:5px;padding-right:5px}.read-result-row{gap:4px}.read-copy-button,.read-clear-button{padding-left:7px;padding-right:7px}}
+.hero{position:relative;z-index:1;pointer-events:none}
+.current-number-strip{display:flex;align-items:center;gap:6px}
+.current-number-strip[hidden]{display:none}
+.current-number-value{flex:1 1 auto;min-width:0}
+.current-number-copy{flex:0 0 auto;min-height:34px;padding:6px 11px;border:0;border-radius:9px;color:#fff;background:var(--blue);cursor:pointer;font-size:.73rem;font-weight:900;touch-action:manipulation}
+.current-number-clear{flex:0 0 auto}
+.scan-hint{margin:-4px auto 14px;max-width:430px;color:var(--muted);text-align:center;font-size:.76rem;font-weight:700;line-height:1.45}
+.build-stamp{margin-top:8px;color:var(--muted);font-size:.68rem;font-weight:900;letter-spacing:.06em;opacity:.75}
 </style>
 </head>
 <body>
 <main class="app-shell">
 <header class="hero"><img class="hero-icon" src="./icon-192.png" alt=""><h1>Barcode Buddy</h1></header>
-<section class="mode-switch" aria-label="Barcode Buddy mode"><button id="numberToBarcodeMode" class="mode-option active" type="button" aria-pressed="true">Number → Barcode</button><button id="barcodeToNumberMode" class="mode-option" type="button" aria-pressed="false">Barcode → Number</button></section>
-<section class="action-grid" id="actionGrid" aria-label="Choose how to enter a barcode"><button class="action-button photo-action" id="takePhotoButton" type="button"><span class="action-icon" aria-hidden="true">▣</span><span id="takePhotoLabel">Take Photo</span></button><button class="action-button number-action" id="openNumberButton" type="button"><span class="action-icon" aria-hidden="true">123</span><span>Enter Number</span></button><input id="cameraInput" class="visually-hidden" type="file" accept="image/*" capture="environment"></section>
+<p class="scan-hint">Photograph a barcode or a printed tracking number. Barcode Buddy works out which one it is.</p>
+<section class="action-grid" id="actionGrid" aria-label="Choose how to enter a barcode"><button class="action-button photo-action" id="takePhotoButton" type="button"><span class="action-icon" aria-hidden="true">▣</span><span>Scan Photo</span></button><button class="action-button number-action" id="openNumberButton" type="button"><span class="action-icon" aria-hidden="true">123</span><span>Enter Number</span></button><input id="cameraInput" class="visually-hidden" type="file" accept="image/*" capture="environment"></section>
 <section id="photoPanel" class="input-panel photo-panel" hidden><div class="panel-heading"><h2>Reading label</h2><button id="cancelPhotoButton" class="panel-close" type="button" aria-label="Close photo">×</button></div><img id="photoPreview" class="photo-preview" alt="Selected package label"><div class="photo-status" id="photoStatus" aria-live="polite"></div><div class="progress-track" id="progressTrack" hidden><div class="progress-bar" id="progressBar"></div></div></section>
 <section id="numberPanel" class="input-panel number-panel" hidden><div class="panel-heading"><h2>Enter barcode number</h2><button id="closeNumberButton" class="panel-close" type="button" aria-label="Close number entry">×</button></div><div class="number-row"><div id="numberDisplay" class="number-display empty" aria-live="polite">Enter numbers below</div><button id="clearButton" class="clear-button" type="button">Clear</button></div><p class="helper">Enter exactly <strong>22 or 26 digits</strong>. Use <strong>?</strong> for an unreadable digit; one question mark creates ten possible barcodes.</p><div class="cursor-controls"><button type="button" data-key="left">←</button><button type="button" data-key="right">→</button><button type="button" data-key="backspace">⌫</button></div><div class="ten-key" aria-label="Ten-key number pad"><button type="button" data-key="1">1</button><button type="button" data-key="2">2</button><button type="button" data-key="3">3</button><button type="button" data-key="4">4</button><button type="button" data-key="5">5</button><button type="button" data-key="6">6</button><button type="button" data-key="7">7</button><button type="button" data-key="8">8</button><button type="button" data-key="9">9</button><button type="button" data-key="?">?</button><button type="button" data-key="0">0</button><button type="button" data-key="clear" class="key-clear">Clear</button></div><button id="generateButton" class="generate-button" type="button">Create Barcode</button></section>
-<div id="currentNumberStrip" class="current-number-strip" hidden><button id="currentNumberValue" class="current-number-value" type="button"></button><button id="currentNumberClearButton" class="current-number-clear" type="button">Clear</button></div>
-<section id="readResultPanel" class="read-result-panel" hidden><div class="read-result-heading">Barcode Number</div><div class="read-result-row"><div id="readBarcodeNumber" class="read-barcode-number"></div><button id="copyReadNumberButton" class="read-copy-button" type="button">Copy</button><button id="clearReadNumberButton" class="read-clear-button" type="button">Clear</button></div></section>
-<section id="resultsSection" class="results-section"><div class="results-heading"><h2>Barcode Results</h2><span id="resultCount" class="result-count">0</span></div><div id="results" class="results" aria-live="polite"><div class="empty-results">Take a label photo or enter the complete number above.</div></div></section>
-<aside id="notice" class="notice">This recreates a barcode for an existing number. It does not create postage, register a shipment, or guarantee that every original postal barcode can be reconstructed from its printed number.</aside>
+<div id="currentNumberStrip" class="current-number-strip" hidden><button id="currentNumberValue" class="current-number-value" type="button"></button><button id="currentNumberCopyButton" class="current-number-copy" type="button">Copy</button><button id="currentNumberClearButton" class="current-number-clear" type="button">Clear</button></div>
+<section id="resultsSection" class="results-section"><div class="results-heading"><h2>Barcode Results</h2><span id="resultCount" class="result-count">0</span></div><div id="results" class="results" aria-live="polite"><div class="empty-results">Scan a barcode or a printed tracking number, or type the number in.</div></div></section>
+<aside id="notice" class="notice">This recreates a barcode for an existing number. It does not create postage, register a shipment, or guarantee that every original postal barcode can be reconstructed from its printed number.<div class="build-stamp">READER BUILD 4</div></aside>
 </main>
 <div id="fullscreenModal" class="fullscreen-modal" hidden><div class="fullscreen-surface"><button id="closeFullscreenButton" class="fullscreen-close" type="button">×</button><div class="fullscreen-stage"><canvas id="fullscreenCanvas"></canvas><div id="fullscreenNumber" class="fullscreen-number"></div></div><div id="fullscreenNavigation" class="fullscreen-navigation" hidden><button id="previousCandidateButton" type="button">Previous</button><span id="fullscreenPosition"></span><button id="nextCandidateButton" type="button">Next</button></div></div></div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>

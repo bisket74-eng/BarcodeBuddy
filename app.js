@@ -8,13 +8,25 @@ const MAX_BARCODE_LENGTH = 26;
 const MAX_UNKNOWN_DIGITS = 2;
 
 /*
-  USPS numbers on a label are always printed in one of these two groupings.
-  The reader uses the grouping itself to work out where a digit went missing,
-  instead of throwing the tail away and settling for 22 digits.
+  USPS numbers are printed in one of these two groupings. The reader uses the
+  grouping to work out where a digit went missing, instead of throwing away the
+  tail and settling for a shorter number.
 */
 const NUMBER_TEMPLATES = [
   { total: 26, slots: [4, 4, 4, 4, 4, 4, 2] },
   { total: 22, slots: [4, 4, 4, 4, 4, 2] }
+];
+
+/*
+  Code 128-C packs two digits per symbol. A 22 digit number is
+  start + 11 data + check = 13 symbols, plus a 4 bar stop = 43 bars.
+  A 26 digit number is 15 symbols plus the stop = 49 bars.
+  Counting bars therefore tells us how long the number is even when the
+  printed digits underneath are damaged.
+*/
+const BAR_COUNTS = [
+  { total: 22, bars: 43 },
+  { total: 26, bars: 49 }
 ];
 
 function isAllowedBarcodeLength(length) {
@@ -38,6 +50,7 @@ const elements = {
   generateButton: document.getElementById("generateButton"),
   currentNumberStrip: document.getElementById("currentNumberStrip"),
   currentNumberValue: document.getElementById("currentNumberValue"),
+  currentNumberCopyButton: document.getElementById("currentNumberCopyButton"),
   currentNumberClearButton: document.getElementById("currentNumberClearButton"),
   resultsSection: document.getElementById("resultsSection"),
   notice: document.getElementById("notice"),
@@ -52,13 +65,6 @@ const elements = {
   nextCandidateButton: document.getElementById("nextCandidateButton"),
   fullscreenPosition: document.getElementById("fullscreenPosition"),
   toast: document.getElementById("toast"),
-  numberToBarcodeMode: document.getElementById("numberToBarcodeMode"),
-  barcodeToNumberMode: document.getElementById("barcodeToNumberMode"),
-  readResultPanel: document.getElementById("readResultPanel"),
-  readBarcodeNumber: document.getElementById("readBarcodeNumber"),
-  copyReadNumberButton: document.getElementById("copyReadNumberButton"),
-  clearReadNumberButton: document.getElementById("clearReadNumberButton"),
-  takePhotoLabel: document.getElementById("takePhotoLabel"),
   actionGrid: document.getElementById("actionGrid")
 };
 
@@ -71,10 +77,7 @@ let toastTimer = 0;
 let isClosingFullscreen = false;
 let ocrWorker = null;
 let ocrWorkerPromise = null;
-let appMode = "numberToBarcode";
-let reversePhotoUrl = "";
 
-const MODE_KEY = "barcodeBuddy.mode.v1";
 const HISTORY_VIEW_KEY = "barcodeBuddyView";
 
 /* ---------------------------------------------------------------- toast */
@@ -312,6 +315,27 @@ function handleKeypadKey(key) {
   }
 }
 
+async function copyCurrentNumber() {
+  if (!numberText) {
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(numberText);
+  } catch {
+    const helper = document.createElement("textarea");
+    helper.value = numberText;
+    helper.style.position = "fixed";
+    helper.style.opacity = "0";
+    document.body.appendChild(helper);
+    helper.select();
+    document.execCommand("copy");
+    helper.remove();
+  }
+
+  showToast("Number copied");
+}
+
 /* --------------------------------------------------------- photo panel */
 
 function setPhotoStatus(message, progress = null) {
@@ -501,6 +525,33 @@ function measureGray(canvas) {
   };
 }
 
+function meanBrightness(gray) {
+  const context = gray.getContext("2d", { willReadFrequently: true });
+  const data = context.getImageData(0, 0, gray.width, gray.height).data;
+  let sum = 0;
+
+  for (let index = 0; index < data.length; index += 4) {
+    sum += data[index];
+  }
+
+  return sum / (data.length / 4);
+}
+
+function invertCanvas(canvas) {
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  const image = context.getImageData(0, 0, canvas.width, canvas.height);
+  const data = image.data;
+
+  for (let index = 0; index < data.length; index += 4) {
+    data[index] = 255 - data[index];
+    data[index + 1] = 255 - data[index + 1];
+    data[index + 2] = 255 - data[index + 2];
+  }
+
+  context.putImageData(image, 0, 0);
+  return canvas;
+}
+
 function longestRun(values, threshold, gapAllowance) {
   let best = null;
   let start = -1;
@@ -530,10 +581,6 @@ function longestRun(values, threshold, gapAllowance) {
   return best;
 }
 
-/*
-  The label is the bright rectangle in the photo. Finding it first keeps the
-  dark poly bag (or a wooden table) out of every later measurement.
-*/
 function findPaperBox(gray) {
   const { data, width, height, paperLevel } = measureGray(gray);
   const rows = new Float32Array(height);
@@ -559,7 +606,6 @@ function findPaperBox(gray) {
 
   const rowRun = longestRun(rows, 0.12, Math.round(height * 0.03));
   const columnRun = longestRun(columns, 0.08, Math.round(width * 0.04));
-
   const fallback = { left: 0, top: 0, right: 1, bottom: 1 };
 
   if (!rowRun || !columnRun) {
@@ -610,11 +656,6 @@ function inkProfileVariance(canvas, inkLevel) {
   return variance / height;
 }
 
-/*
-  A straight label makes every printed line land on its own row, so the row
-  darkness profile spikes. Whichever rotation produces the sharpest spikes is
-  the one that squares the label up.
-*/
 function estimateSkewAngle(gray) {
   const { inkLevel } = measureGray(gray);
   const scoreFor = (angle) =>
@@ -646,11 +687,6 @@ function estimateSkewAngle(gray) {
   return bestAngle;
 }
 
-/*
-  On a postal label the tracking number is the text line printed directly under
-  a barcode. Locating those "text under heavy ink" bands is far more reliable
-  than cropping a fixed slice of the photo.
-*/
 function findLineBands(gray) {
   const { data, width, height, inkLevel } = measureGray(gray);
   const profile = new Float32Array(height);
@@ -684,7 +720,7 @@ function findLineBands(gray) {
 
   const bands = [];
 
-  const addBand = (run, priority, weight) => {
+  const addBand = (run, priority, weight, barcode) => {
     const textHeight = run.bottom - run.top + 1;
 
     if (textHeight < height * 0.004 || textHeight > height * 0.1) {
@@ -696,13 +732,20 @@ function findLineBands(gray) {
     bands.push({
       top: Math.max(0, run.top - pad) / height,
       bottom: Math.min(height, run.bottom + pad) / height,
+      barcode: barcode
+        ? {
+            left: 0,
+            right: 1,
+            top: barcode.top / height,
+            bottom: (barcode.bottom + 1) / height
+          }
+        : null,
       priority,
       weight
     });
   };
 
-  // First choice: a text line printed directly under a barcode. That is where
-  // the tracking number sits on every postal label.
+  // First choice: a text line printed directly under a barcode.
   runs.forEach((run, index) => {
     if (run.kind !== "heavy") {
       return;
@@ -728,14 +771,12 @@ function findLineBands(gray) {
         break;
       }
 
-      addBand(following, 0, runHeight);
+      addBand(following, 0, runHeight, run);
       break;
     }
   });
 
-  // Second choice: any text line at all. This is what reads a number typed on
-  // a computer screen, a packing slip or a handwritten note, where there is no
-  // barcode above it to anchor to.
+  // Second choice: any text line at all, for a number on a screen or a slip.
   runs.forEach((run) => {
     if (run.kind !== "text") {
       return;
@@ -747,7 +788,7 @@ function findLineBands(gray) {
       ink += profile[y];
     }
 
-    addBand(run, 1, ink * 100);
+    addBand(run, 1, ink * 100, null);
   });
 
   bands.sort(
@@ -774,46 +815,109 @@ function findLineBands(gray) {
   }
 
   return chosen.map((band) => ({
-    left: 0,
-    right: 1,
-    top: band.top,
-    bottom: band.bottom,
+    box: { left: 0, right: 1, top: band.top, bottom: band.bottom },
+    barcodeBox: band.barcode,
     anchored: band.priority === 0
   }));
 }
 
-function meanBrightness(gray) {
-  const context = gray.getContext("2d", { willReadFrequently: true });
-  const data = context.getImageData(0, 0, gray.width, gray.height).data;
-  let sum = 0;
+/* ------------------------------------------------- barcode bar counting */
 
-  for (let index = 0; index < data.length; index += 4) {
-    sum += data[index];
+function countBarsOnRow(data, width, y) {
+  let darkest = 255;
+  let lightest = 0;
+
+  for (let x = 0; x < width; x += 1) {
+    const value = data[(y * width + x) * 4];
+
+    if (value < darkest) darkest = value;
+    if (value > lightest) lightest = value;
   }
 
-  return sum / (data.length / 4);
-}
-
-function invertCanvas(canvas) {
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-  const image = context.getImageData(0, 0, canvas.width, canvas.height);
-  const data = image.data;
-
-  for (let index = 0; index < data.length; index += 4) {
-    data[index] = 255 - data[index];
-    data[index + 1] = 255 - data[index + 1];
-    data[index + 2] = 255 - data[index + 2];
+  if (lightest - darkest < 45) {
+    return 0;
   }
 
-  context.putImageData(image, 0, 0);
-  return canvas;
+  const threshold = (darkest + lightest) / 2;
+  const runs = [];
+  let current = null;
+
+  for (let x = 0; x < width; x += 1) {
+    const dark = data[(y * width + x) * 4] < threshold;
+
+    if (current && current.dark === dark) {
+      current.length += 1;
+    } else {
+      current = { dark, length: 1 };
+      runs.push(current);
+    }
+  }
+
+  const barWidths = runs
+    .filter((run) => run.dark)
+    .map((run) => run.length)
+    .sort((first, second) => first - second);
+
+  if (barWidths.length < 20) {
+    return 0;
+  }
+
+  // A narrow module is the thin end of the bar widths. Anything wider than a
+  // handful of modules is a gap between separate barcodes, not part of one.
+  const unit = Math.max(1, barWidths[Math.floor(barWidths.length * 0.2)]);
+  const segments = [];
+  let segment = 0;
+
+  for (const run of runs) {
+    if (run.dark) {
+      segment += 1;
+    } else if (run.length > unit * 7) {
+      segments.push(segment);
+      segment = 0;
+    }
+  }
+
+  segments.push(segment);
+
+  return Math.max(...segments);
 }
 
-/*
-  Local thresholding. A thermal label that is creased, shadowed or faded has no
-  single brightness that separates ink from paper, so each pixel is compared to
-  its own neighbourhood instead.
-*/
+function guessLengthFromBarcode(block) {
+  toGrayscale(block);
+
+  const context = block.getContext("2d", { willReadFrequently: true });
+  const { width, height } = block;
+  const data = context.getImageData(0, 0, width, height).data;
+  const counts = [];
+
+  for (const ratio of [0.28, 0.42, 0.56, 0.7]) {
+    const y = Math.min(height - 1, Math.max(0, Math.round(height * ratio)));
+    const count = countBarsOnRow(data, width, y);
+
+    if (count >= 25) {
+      counts.push(count);
+    }
+  }
+
+  if (counts.length < 2) {
+    return null;
+  }
+
+  counts.sort((first, second) => first - second);
+
+  const median = counts[Math.floor(counts.length / 2)];
+
+  for (const option of BAR_COUNTS) {
+    if (Math.abs(median - option.bars) <= 2) {
+      return option.total;
+    }
+  }
+
+  return null;
+}
+
+/* ------------------------------------------------------- image cleaning */
+
 function adaptiveThreshold(canvas, radius, offset) {
   const context = canvas.getContext("2d", { willReadFrequently: true });
   const { width, height } = canvas;
@@ -864,7 +968,6 @@ function adaptiveThreshold(canvas, radius, offset) {
 function prepareBandForOcr(band) {
   toGrayscale(band);
 
-  // White digits on a dark screen have to be flipped before thresholding.
   if (meanBrightness(band) < 118) {
     invertCanvas(band);
   }
@@ -905,27 +1008,36 @@ function buildOcrRegions(image) {
 
   const bandGuide = toGrayscale(drawScaled(straight, 480));
 
-  // A phone photo of a dark-mode screen is mostly dark. Flip it so the rest of
-  // the pipeline always sees dark text on light background.
   if (meanBrightness(bandGuide) < 118) {
     invertCanvas(toGrayscale(straight));
     invertCanvas(bandGuide);
   }
 
-  const boxes = findLineBands(bandGuide);
-  const anchored = boxes.some((box) => box.anchored);
+  const found = findLineBands(bandGuide);
+  const anchored = found.some((band) => band.anchored);
 
-  if (!boxes.length) {
-    boxes.push({ left: 0, right: 1, top: 0.30, bottom: 0.55 });
-    boxes.push({ left: 0, right: 1, top: 0.50, bottom: 0.75 });
+  if (!found.length) {
+    found.push({
+      box: { left: 0, right: 1, top: 0.30, bottom: 0.55 },
+      barcodeBox: null,
+      anchored: false
+    });
+    found.push({
+      box: { left: 0, right: 1, top: 0.50, bottom: 0.75 },
+      barcodeBox: null,
+      anchored: false
+    });
   }
 
   return {
     straight,
     anchored,
-    regions: boxes
-      .slice(0, 5)
-      .map((box) => cropRegion(straight, box, 2000))
+    regions: found.slice(0, 5).map((band) => ({
+      canvas: cropRegion(straight, band.box, 2000),
+      lengthHint: band.barcodeBox
+        ? guessLengthFromBarcode(cropRegion(straight, band.barcodeBox, 1800))
+        : null
+    }))
   };
 }
 
@@ -954,13 +1066,7 @@ function compositions(total, slots) {
   return results;
 }
 
-/*
-  Fit the digit groups the reader actually saw onto the 22 and 26 digit
-  layouts, and put a ? wherever the layout says a digit is missing. This is
-  what stops "9261 2903 6172 2458 1949 2  64 33" from collapsing into a
-  22 digit number with the tail thrown away.
-*/
-function fitTemplates(groups) {
+function fitTemplates(groups, lengthHint) {
   const digits = groups.join("");
 
   if (!digits || !/^[0-9]+$/.test(digits)) {
@@ -970,6 +1076,10 @@ function fitTemplates(groups) {
   let best = null;
 
   for (const template of NUMBER_TEMPLATES) {
+    if (lengthHint && template.total !== lengthHint) {
+      continue;
+    }
+
     const missing = template.total - digits.length;
 
     if (missing < 0 || missing > MAX_UNKNOWN_DIGITS) {
@@ -1012,17 +1122,21 @@ function fitTemplates(groups) {
         pattern += "?".repeat(combo[groups.length]);
       }
 
+      /*
+        A ? sitting at the very end usually means the reader ran out of digits
+        rather than that the last digit was smudged, so a fit that parks its
+        unknowns on the tail is treated as weaker evidence.
+      */
+      const trailingUnknowns = (pattern.match(/\?+$/) || [""])[0].length;
+
       const rank =
-        score * 10 - missing * 4 + (template.total === 26 ? 2 : 0);
+        score * 10 -
+        missing * 4 -
+        trailingUnknowns * 25 +
+        (template.total === 26 ? 2 : 0);
 
       if (!best || rank > best.rank) {
-        best = {
-          pattern,
-          rank,
-          score,
-          missing,
-          length: template.total
-        };
+        best = { pattern, rank, score, missing, length: template.total };
       }
     }
   }
@@ -1030,7 +1144,7 @@ function fitTemplates(groups) {
   return best;
 }
 
-function assembleFromGroups(groups) {
+function assembleFromGroups(groups, lengthHint) {
   if (!groups.length) {
     return null;
   }
@@ -1042,7 +1156,7 @@ function assembleFromGroups(groups) {
     const lowestEnd = Math.max(start + 1, groups.length - maxTrim);
 
     for (let end = groups.length; end >= lowestEnd; end -= 1) {
-      const result = fitTemplates(groups.slice(start, end));
+      const result = fitTemplates(groups.slice(start, end), lengthHint);
 
       if (!result) {
         continue;
@@ -1074,11 +1188,18 @@ function digitGroups(line) {
     .filter(Boolean);
 }
 
-function bestCandidateFromLines(lines) {
+/*
+  A band holds one physical line of print. If the reader breaks it into several
+  output lines because a crease interrupted it, the tokens still belong in
+  reading order, so the joined reading is offered as a candidate too. This is
+  what recovers the digits after a damaged spot instead of stopping there.
+*/
+function bestCandidateFromLines(lines, lengthHint) {
+  const readings = [...lines, lines.join(" ")];
   let best = null;
 
-  for (const line of lines) {
-    const candidate = assembleFromGroups(digitGroups(line));
+  for (const reading of readings) {
+    const candidate = assembleFromGroups(digitGroups(reading), lengthHint);
 
     if (candidate && (!best || candidate.rank > best.rank)) {
       best = candidate;
@@ -1088,17 +1209,13 @@ function bestCandidateFromLines(lines) {
   return best;
 }
 
-/*
-  Every USPS Intelligent Mail package barcode number starts with a 9. A leading
-  0 or 6 is always a misread of that 9.
-*/
 function applyPostalCorrections(pattern) {
   if (!isAllowedBarcodeLength(pattern.length)) {
     return pattern;
   }
 
-  // 0, 6 and 8 are the shapes that get read in place of a leading 9. Anything
-  // else is left alone rather than overwritten with a guess.
+  // 0, 6 and 8 are the shapes read in place of the leading 9 that starts every
+  // USPS package barcode number.
   if (/[068]/.test(pattern[0])) {
     return `9${pattern.slice(1)}`;
   }
@@ -1157,6 +1274,34 @@ async function ocrLines(worker, canvas, pageSegmentationMode) {
     .filter(Boolean);
 }
 
+async function readBand(worker, region) {
+  const prepared = prepareBandForOcr(region.canvas);
+  const hint = region.lengthHint;
+
+  let best = bestCandidateFromLines(await ocrLines(worker, prepared, "7"), hint);
+
+  // Sparse mode picks up digit clusters that single-line mode abandons after a
+  // crease or a smudge.
+  if (!best || best.missing > 0) {
+    const sparse = bestCandidateFromLines(
+      await ocrLines(worker, prepared, "11"),
+      hint
+    );
+
+    if (sparse && (!best || sparse.rank > best.rank)) {
+      best = sparse;
+    }
+  }
+
+  // If the bar count hint left nothing readable, fall back to an open fit
+  // rather than returning nothing at all.
+  if (!best && hint) {
+    best = bestCandidateFromLines(await ocrLines(worker, prepared, "7"), null);
+  }
+
+  return best;
+}
+
 async function runOcr(image, options = {}) {
   const { startProgress = 20, endProgress = 92 } = options;
   const worker = await getOcrWorker();
@@ -1170,11 +1315,9 @@ async function runOcr(image, options = {}) {
     toGrayscale(whole);
     adaptiveThreshold(whole, Math.round(whole.height * 0.02), 10);
 
-    return bestCandidateFromLines(await ocrLines(worker, whole, "6"));
+    return bestCandidateFromLines(await ocrLines(worker, whole, "6"), null);
   }
 
-  // No barcode anywhere in the picture means this is a number on a screen, a
-  // slip or a note. Read the picture as a whole first.
   if (!anchored) {
     const candidate = await readWholeImage(startProgress);
 
@@ -1194,8 +1337,7 @@ async function runOcr(image, options = {}) {
 
     setPhotoStatus("Reading the printed number…", progress);
 
-    const lines = await ocrLines(worker, prepareBandForOcr(regions[index]), "7");
-    const candidate = bestCandidateFromLines(lines);
+    const candidate = await readBand(worker, regions[index]);
 
     if (!candidate) {
       continue;
@@ -1203,10 +1345,7 @@ async function runOcr(image, options = {}) {
 
     found.push(candidate);
 
-    const perfect =
-      candidate.missing === 0 && candidate.score >= candidate.length / 2;
-
-    if (perfect) {
+    if (candidate.missing === 0 && candidate.score >= candidate.length / 2) {
       break;
     }
   }
@@ -1268,10 +1407,8 @@ async function decodeWithNativeDetector(image) {
     const results = await detector.detect(image);
 
     for (const result of results || []) {
-      const digits = extractDecodedDigits(result.rawValue);
-
-      if (digits) {
-        return digits;
+      if (extractDecodedDigits(result.rawValue)) {
+        return result.rawValue;
       }
     }
 
@@ -1308,163 +1445,16 @@ async function decodeWithZxing(image) {
 }
 
 async function decodeBarcode(image) {
-  let decoded = await decodeWithNativeDetector(image);
+  let raw = await decodeWithNativeDetector(image);
 
-  if (!extractDecodedDigits(decoded)) {
-    decoded = await decodeWithZxing(image);
+  if (!extractDecodedDigits(raw)) {
+    raw = (await decodeWithZxing(image)) || raw;
   }
 
-  return extractDecodedDigits(decoded);
+  return { raw, digits: extractDecodedDigits(raw) };
 }
 
-/* ------------------------------------------------------- mode switching */
-
-function clearReversePhoto() {
-  if (reversePhotoUrl) {
-    URL.revokeObjectURL(reversePhotoUrl);
-    reversePhotoUrl = "";
-  }
-
-  elements.photoPreview.removeAttribute("src");
-  elements.photoPanel.hidden = true;
-  updateInputOpenState();
-  setPhotoStatus("");
-}
-
-function clearReadResult() {
-  if (elements.readBarcodeNumber) {
-    elements.readBarcodeNumber.textContent = "";
-  }
-
-  if (elements.readResultPanel) {
-    elements.readResultPanel.hidden = true;
-  }
-}
-
-function showReadResult(number) {
-  if (!elements.readBarcodeNumber || !elements.readResultPanel) {
-    return;
-  }
-
-  elements.readBarcodeNumber.textContent = groupNumber(number);
-  elements.readResultPanel.hidden = false;
-
-  requestAnimationFrame(() => {
-    elements.readBarcodeNumber.scrollLeft = 0;
-    elements.readResultPanel.scrollIntoView({
-      behavior: "smooth",
-      block: "nearest"
-    });
-  });
-}
-
-async function copyReadNumber() {
-  const number = String(
-    elements.readBarcodeNumber?.textContent || ""
-  ).replace(/\D/g, "");
-
-  if (!number) {
-    return;
-  }
-
-  try {
-    await navigator.clipboard.writeText(number);
-  } catch {
-    const helper = document.createElement("textarea");
-    helper.value = number;
-    helper.style.position = "fixed";
-    helper.style.opacity = "0";
-    document.body.appendChild(helper);
-    helper.select();
-    document.execCommand("copy");
-    helper.remove();
-  }
-
-  showToast("Number copied");
-}
-
-function applyAppMode(nextMode) {
-  appMode = nextMode === "barcodeToNumber" ? "barcodeToNumber" : "numberToBarcode";
-
-  try {
-    localStorage.setItem(MODE_KEY, appMode);
-  } catch {}
-
-  const reverse = appMode === "barcodeToNumber";
-
-  document.body.classList.toggle("barcode-read-mode", reverse);
-
-  elements.numberToBarcodeMode?.classList.toggle("active", !reverse);
-  elements.barcodeToNumberMode?.classList.toggle("active", reverse);
-  elements.numberToBarcodeMode?.setAttribute("aria-pressed", String(!reverse));
-  elements.barcodeToNumberMode?.setAttribute("aria-pressed", String(reverse));
-
-  if (elements.openNumberButton) {
-    elements.openNumberButton.hidden = reverse;
-  }
-
-  if (elements.takePhotoLabel) {
-    elements.takePhotoLabel.textContent = reverse ? "Scan Barcode" : "Take Photo";
-  }
-
-  clearReversePhoto();
-  clearReadResult();
-}
-
-async function processReversePhoto(file) {
-  if (!file) {
-    return;
-  }
-
-  clearReadResult();
-  clearReversePhoto();
-
-  reversePhotoUrl = URL.createObjectURL(file);
-  elements.photoPreview.src = reversePhotoUrl;
-  elements.photoPanel.hidden = false;
-  updateInputOpenState();
-  setPhotoStatus("Loading the barcode photo…", 5);
-
-  try {
-    await elements.photoPreview.decode();
-
-    setPhotoStatus("Reading the barcode…", 20);
-
-    let number = await decodeBarcode(elements.photoPreview);
-
-    if (!number) {
-      number = await runOcr(elements.photoPreview, {
-        startProgress: 35,
-        endProgress: 92
-      });
-    }
-
-    clearReversePhoto();
-
-    if (number) {
-      showReadResult(number);
-      showToast(
-        countUnknownDigits(number)
-          ? "Found the number, but some digits are unclear"
-          : "Barcode number found"
-      );
-    } else {
-      showToast(
-        "No readable number found. Move closer and hold the label flat.",
-        3500
-      );
-    }
-  } catch (error) {
-    console.error(error);
-    clearReversePhoto();
-    showToast(
-      error?.message || "That barcode could not be read. Try a closer photo.",
-      3500
-    );
-  } finally {
-    elements.cameraInput.value = "";
-  }
-}
+/* ------------------------------------------------------------ main flow */
 
 async function processPhoto(file) {
   if (!file) {
@@ -1486,24 +1476,37 @@ async function processPhoto(file) {
   elements.photoPreview.src = currentPhotoUrl;
   elements.photoPanel.hidden = false;
   updateInputOpenState();
-  setPhotoStatus("Loading the label photo…", 3);
+  setPhotoStatus("Loading the photo…", 3);
 
   try {
     await elements.photoPreview.decode();
 
-    setPhotoStatus("Trying to scan the barcode…", 12);
+    setPhotoStatus("Looking for a barcode…", 12);
 
-    const decodedDigits = await decodeBarcode(elements.photoPreview);
+    const scanned = await decodeBarcode(elements.photoPreview);
 
-    if (decodedDigits) {
-      setNumberText(decodedDigits);
+    if (scanned.digits) {
+      setNumberText(scanned.digits);
       closePhotoPanel();
       generateCandidates({ closePanels: true });
-      showToast("Barcode read from the photo");
+      showToast(`Barcode scanned — ${scanned.digits.length} digits`);
       return;
     }
 
-    setPhotoStatus("The barcode did not scan. Reading the printed number…", 18);
+    const otherDigits = String(scanned.raw || "").replace(/\D/g, "");
+
+    if (otherDigits.length >= 8) {
+      closePhotoPanel();
+      setNumberText(otherDigits);
+      openNumberPanel({ historyMode: "replace" });
+      showToast(
+        `That barcode holds ${otherDigits.length} digits. Postal numbers are 22 or 26.`,
+        3600
+      );
+      return;
+    }
+
+    setPhotoStatus("No barcode found. Reading the printed number…", 18);
 
     const pattern = await runOcr(elements.photoPreview);
 
@@ -1518,7 +1521,7 @@ async function processPhoto(file) {
         showToast(
           unknown
             ? `Read ${pattern.length} digits with ${unknown} unclear. Tap the number to edit.`
-            : `Read all ${pattern.length} digits from the label`,
+            : `Read all ${pattern.length} digits`,
           3200
         );
       } else {
@@ -1531,7 +1534,7 @@ async function processPhoto(file) {
 
     closePhotoPanel();
     openNumberPanel({ historyMode: "replace" });
-    showToast("The number could not be read. Try a closer, flatter photo.", 3200);
+    showToast("Nothing readable found. Try a closer, flatter photo.", 3200);
   } catch (error) {
     console.error(error);
     closePhotoPanel();
@@ -1657,7 +1660,8 @@ function renderResults() {
   if (!candidates.length) {
     const empty = document.createElement("div");
     empty.className = "empty-results";
-    empty.textContent = "Take a label photo or enter the complete number above.";
+    empty.textContent =
+      "Scan a barcode or a printed tracking number, or type the number in.";
     elements.results.appendChild(empty);
     return;
   }
@@ -1876,55 +1880,13 @@ async function downloadBarcode(value) {
 
 /* ---------------------------------------------------------------- wiring */
 
-function openCamera() {
-  if (appMode === "numberToBarcode") {
-    void getOcrWorker().catch((error) => {
-      console.warn("The OCR reader could not be preloaded.", error);
-    });
-  }
+elements.takePhotoButton.addEventListener("click", () => {
+  void getOcrWorker().catch((error) => {
+    console.warn("The OCR reader could not be preloaded.", error);
+  });
 
   elements.cameraInput.click();
-}
-
-elements.takePhotoButton.addEventListener("click", openCamera);
-
-/*
-  The mode buttons are wired through a delegated capture listener as well as
-  direct listeners, so a stray overlay or a swallowed click cannot leave the
-  switch stuck on one side.
-*/
-function handleModeTap(event) {
-  const target = event.target instanceof Element
-    ? event.target.closest("#numberToBarcodeMode, #barcodeToNumberMode")
-    : null;
-
-  if (!target) {
-    return;
-  }
-
-  event.preventDefault();
-  event.stopPropagation();
-
-  const nextMode =
-    target.id === "barcodeToNumberMode" ? "barcodeToNumber" : "numberToBarcode";
-
-  if (nextMode === appMode) {
-    return;
-  }
-
-  applyAppMode(nextMode);
-  showToast(
-    nextMode === "barcodeToNumber"
-      ? "Scan a barcode to get its number"
-      : "Enter a number to rebuild its barcode"
-  );
-}
-
-document.addEventListener("click", handleModeTap, true);
-document.addEventListener("pointerup", handleModeTap, true);
-
-elements.copyReadNumberButton?.addEventListener("click", copyReadNumber);
-elements.clearReadNumberButton?.addEventListener("click", clearReadResult);
+});
 
 elements.openNumberButton.addEventListener("click", () => {
   if (elements.numberPanel.hidden) {
@@ -1936,6 +1898,11 @@ elements.openNumberButton.addEventListener("click", () => {
 
 elements.currentNumberValue.addEventListener("click", () => {
   openNumberPanel();
+});
+
+elements.currentNumberCopyButton?.addEventListener("click", (event) => {
+  event.stopPropagation();
+  void copyCurrentNumber();
 });
 
 elements.currentNumberClearButton.addEventListener("click", (event) => {
@@ -1958,14 +1925,7 @@ elements.generateButton.addEventListener("click", () => {
 });
 
 elements.cameraInput.addEventListener("change", () => {
-  const file = elements.cameraInput.files?.[0];
-
-  if (appMode === "barcodeToNumber") {
-    void processReversePhoto(file);
-    return;
-  }
-
-  void processPhoto(file);
+  void processPhoto(elements.cameraInput.files?.[0]);
 });
 
 document.querySelectorAll("[data-key]").forEach((button) => {
@@ -2038,17 +1998,36 @@ window.addEventListener("pagehide", () => {
 });
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js").catch((error) => {
-      console.warn("Service worker registration failed.", error);
-    });
-  });
-}
+  let reloadedForUpdate = false;
 
-try {
-  applyAppMode(localStorage.getItem(MODE_KEY));
-} catch {
-  applyAppMode("numberToBarcode");
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (reloadedForUpdate) {
+      return;
+    }
+
+    reloadedForUpdate = true;
+    window.location.reload();
+  });
+
+  window.addEventListener("load", () => {
+    navigator.serviceWorker
+      .register("./sw.js", { updateViaCache: "none" })
+      .then((registration) => {
+        registration.update();
+        registration.waiting?.postMessage({ type: "SKIP_WAITING" });
+
+        registration.addEventListener("updatefound", () => {
+          registration.installing?.addEventListener("statechange", (event) => {
+            if (event.target.state === "installed") {
+              registration.waiting?.postMessage({ type: "SKIP_WAITING" });
+            }
+          });
+        });
+      })
+      .catch((error) => {
+        console.warn("Service worker registration failed.", error);
+      });
+  });
 }
 
 renderNumberDisplay();
