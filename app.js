@@ -168,12 +168,44 @@ function updateCurrentNumberStrip() {
   }
 }
 
+/*
+  The caret is an empty span, so it carries its own inline styling. Inline
+  styles outrank anything in styles.css, which is the only way to guarantee it
+  is actually visible.
+*/
+function makeCaret() {
+  const caret = document.createElement("span");
+  caret.className = "keypad-caret";
+  caret.setAttribute("aria-hidden", "true");
+  caret.style.cssText = [
+    "display:inline-block",
+    "position:static",
+    "width:3px",
+    "min-width:3px",
+    "height:1.15em",
+    "margin:0 2px",
+    "padding:0",
+    "border:0",
+    "border-radius:2px",
+    "vertical-align:-0.18em",
+    "background:#d32f2f",
+    "opacity:1",
+    "visibility:visible"
+  ].join(";");
+
+  return caret;
+}
+
 function renderNumberDisplay() {
   elements.numberDisplay.innerHTML = "";
 
   if (!numberText) {
-    elements.numberDisplay.textContent = "Enter numbers below";
     elements.numberDisplay.classList.add("empty");
+    elements.numberDisplay.appendChild(makeCaret());
+
+    const placeholder = document.createElement("span");
+    placeholder.textContent = " Enter numbers below";
+    elements.numberDisplay.appendChild(placeholder);
     return;
   }
 
@@ -181,9 +213,7 @@ function renderNumberDisplay() {
 
   for (let index = 0; index <= numberText.length; index += 1) {
     if (index === keypadCaret) {
-      const caret = document.createElement("span");
-      caret.className = "keypad-caret";
-      elements.numberDisplay.appendChild(caret);
+      elements.numberDisplay.appendChild(makeCaret());
     }
 
     if (index < numberText.length) {
