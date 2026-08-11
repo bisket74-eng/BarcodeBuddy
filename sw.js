@@ -1,5 +1,4 @@
-const CACHE_NAME = "barcode-buddy-v10";
-
+const CACHE_NAME = "barcode-buddy-v11";
 const APP_FILES = [
   "./",
   "./index.html",
@@ -25,39 +24,44 @@ self.addEventListener("activate", (event) => {
           .filter((key) => key !== CACHE_NAME)
           .map((key) => caches.delete(key))
       )
-    )
+    ).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
 self.addEventListener("fetch", (event) => {
-  if (event.request.method !== "GET") {
+  if (event.request.method !== "GET") return;
+
+  const url = new URL(event.request.url);
+  const isAppFile =
+    url.pathname.endsWith("/index.html") ||
+    url.pathname.endsWith("/app.js") ||
+    url.pathname.endsWith("/styles.css") ||
+    url.pathname.endsWith("/manifest.json") ||
+    url.pathname.endsWith("/sw.js");
+
+  if (isAppFile) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, copy).catch(() => {});
+          });
+          return response;
+        })
+        .catch(() => caches.match(event.request).then((cached) => cached || caches.match("./index.html")))
+    );
     return;
   }
 
   event.respondWith(
     caches.match(event.request).then((cached) => {
-      if (cached) {
-        return cached;
-      }
-
-      return fetch(event.request)
-        .then((response) => {
-          const copy = response.clone();
-
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, copy).catch(() => {});
-          });
-
-          return response;
-        })
-        .catch(() => {
-          if (event.request.mode === "navigate") {
-            return caches.match("./index.html");
-          }
-
-          throw new Error("Offline resource unavailable");
-        });
+      if (cached) return cached;
+      return fetch(event.request).then((response) => {
+        const copy = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy).catch(() => {}));
+        return response;
+      });
     })
   );
 });
