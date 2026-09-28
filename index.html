@@ -45,34 +45,36 @@
 .current-number-clear{flex:0 0 auto}
 .build-stamp{margin-top:8px;color:var(--muted);font-size:.68rem;font-weight:900;letter-spacing:.06em;opacity:.75}
 
-/* Printing: Dynamically scale to fit the driver's hardcoded dimensions */
+/* Printing: Hardcoded dimensions with overflow hidden to prevent Chrome auto-landscape */
 #printSheet{display:none}
 @media print{
-  /* Strip @page so the browser doesn't trigger the Zebra auto-rotation bug */
-  html,body{margin:0!important;padding:0!important;background:#fff!important;width:100%!important;height:100%!important;overflow:hidden!important}
+  @page{size:1.25in 4.25in;margin:0}
+  
+  html,body{width:1.25in!important;height:4.25in!important;margin:0!important;padding:0!important;background:#fff!important;overflow:hidden!important}
   body>*:not(#printSheet){display:none!important}
   
   #printSheet{
-    display:flex!important;
-    justify-content:center;
-    align-items:center;
+    display:block!important;
     position:absolute;
     left:0;
     top:0;
-    width:100%!important;
-    height:100%!important;
+    width:1.25in!important;
+    height:4.25in!important;
     margin:0;
     padding:0;
+    overflow:hidden!important;
   }
   
   #printSheet img{
-    /* Rotate 90 degrees to run lengthwise down the feed */
-    transform:rotate(90deg);
-    
-    /* vh ensures the barcode's length never exceeds the canvas height allowed by the driver */
-    width:95vh!important; 
-    max-height:95vw!important; 
-    
+    display:block;
+    position:absolute;
+    top:50%;
+    left:50%;
+    width:4.15in!important; 
+    height:1.15in!important; 
+    max-width:none!important;
+    max-height:none!important;
+    transform:translate(-50%, -50%) rotate(90deg);
     object-fit:contain;
     image-rendering:pixelated;
   }
