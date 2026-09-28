@@ -1736,7 +1736,14 @@ function renderResults() {
     downloadButton.textContent = "Download Label";
     downloadButton.addEventListener("click", () => downloadBarcode(value));
 
-    actions.append(shareButton, downloadButton);
+    const printButton = document.createElement("button");
+    printButton.className = "share-button";
+    printButton.type = "button";
+    printButton.style.gridColumn = "1 / -1";
+    printButton.textContent = "Print Label (1 x 3.5 in)";
+    printButton.addEventListener("click", () => printBarcode(value));
+
+    actions.append(printButton, shareButton, downloadButton);
     card.append(barcodeTap, actions);
     elements.results.appendChild(card);
 
@@ -2011,6 +2018,34 @@ async function downloadBarcode(value) {
     showToast("Label downloaded");
   } catch (error) {
     showToast(error?.message || "The barcode label could not be downloaded.");
+  }
+}
+
+/*
+  Print: puts the label into a hidden sheet that is set to exactly 1 inch by
+  3.5 inches in the print styles (see index.html), then opens the browser's
+  print screen. The size is given in real inches, so the label prints at its
+  true size without "shrink to fit" and without filling the page.
+*/
+async function printBarcode(value) {
+  try {
+    const image = document.getElementById("printImage");
+
+    if (!image) {
+      throw new Error("The print sheet is missing.");
+    }
+
+    const url = createExportCanvas(value).toDataURL("image/png");
+
+    await new Promise((resolve, reject) => {
+      image.onload = resolve;
+      image.onerror = () => reject(new Error("The label could not be prepared."));
+      image.src = url;
+    });
+
+    window.print();
+  } catch (error) {
+    showToast(error?.message || "The label could not be printed.");
   }
 }
 
