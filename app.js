@@ -1733,7 +1733,7 @@ function renderResults() {
     const downloadButton = document.createElement("button");
     downloadButton.className = "download-button";
     downloadButton.type = "button";
-    downloadButton.textContent = "Download";
+    downloadButton.textContent = "Download Label";
     downloadButton.addEventListener("click", () => downloadBarcode(value));
 
     actions.append(shareButton, downloadButton);
@@ -1820,12 +1820,16 @@ function renderFullscreen() {
 }
 
 /*
-  Export: a PDF whose page is exactly one 3 inch by 1 inch label (216 x 72
-  points), so printing gives a 3x1 label instead of a full sheet. The bars and
-  the number are drawn as vector shapes and text, so they stay sharp.
+  Export: one PDF on a landscape 11 x 8.5 sheet. The barcode label is 3.5
+  inches wide by 1 inch tall (barcode with the tracking number underneath),
+  centered top to bottom and set against the left margin.
+  The bars and number are vector shapes and text, so they print sharp.
 */
-const LABEL_WIDTH_PT = 216;
-const LABEL_HEIGHT_PT = 72;
+const LABEL_WIDTH_PT = 252; /* 3.5 in */
+const LABEL_HEIGHT_PT = 72; /* 1 in */
+const PAGE_WIDTH_PT = 792; /* 11 in, landscape */
+const PAGE_HEIGHT_PT = 612; /* 8.5 in, landscape */
+const LEFT_MARGIN_PT = 36; /* half an inch */
 
 /* Reads the Code 128 bar pattern as runs of modules: [start, width, ...]. */
 function getBarcodeModules(value) {
@@ -1874,20 +1878,32 @@ function buildLabelPdf(value, barData) {
     0
   ) / 1000;
 
-  const maxTextWidth = LABEL_WIDTH_PT - 16;
-  const fontSize = Math.min(12, maxTextWidth / textUnits);
+  const designWidth = LABEL_WIDTH_PT;
+  const designHeight = LABEL_HEIGHT_PT;
+
+  const fontSize = Math.min(12, (designWidth - 16) / textUnits);
   const textWidth = textUnits * fontSize;
-  const textX = (LABEL_WIDTH_PT - textWidth) / 2;
-  const textY = 7;
+  const textX = (designWidth - textWidth) / 2;
+  const textY = 6;
 
   /* 10 modules of blank space each side, as Code 128 requires. */
-  const moduleWidth = (LABEL_WIDTH_PT - 8) / (modules + 20);
-  const barsLeft = (LABEL_WIDTH_PT - modules * moduleWidth) / 2;
-  const barsBottom = 22;
-  const barsHeight = LABEL_HEIGHT_PT - 6 - barsBottom;
+  const moduleWidth = (designWidth - 8) / (modules + 20);
+  const barsLeft = (designWidth - modules * moduleWidth) / 2;
+  const barsBottom = 21;
+  const barsHeight = designHeight - 6 - barsBottom;
+
+  const pageWidth = PAGE_WIDTH_PT;
+  const pageHeight = PAGE_HEIGHT_PT;
+
+  /* Against the left margin, centered top to bottom. */
+  const labelX = LEFT_MARGIN_PT;
+  const labelY = (pageHeight - designHeight) / 2;
 
   const fmt = (n) => n.toFixed(3);
-  let content = "q\n1 1 1 rg\n0 0 " + LABEL_WIDTH_PT + " " + LABEL_HEIGHT_PT + " re f\n0 0 0 rg\n";
+  let content = "q\n1 1 1 rg\n0 0 " + pageWidth + " " + pageHeight + " re f\n";
+
+  content +=
+    "1 0 0 1 " + fmt(labelX) + " " + fmt(labelY) + " cm\n0 0 0 rg\n";
 
   bars.forEach(([start, width]) => {
     content +=
@@ -1902,8 +1918,8 @@ function buildLabelPdf(value, barData) {
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R >>",
     "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + LABEL_WIDTH_PT + " " +
-      LABEL_HEIGHT_PT + "] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + pageWidth + " " +
+      pageHeight + "] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
     "<< /Length " + content.length + " >>\nstream\n" + content + "endstream",
     "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>"
   ];
