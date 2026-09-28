@@ -45,14 +45,38 @@
 .current-number-clear{flex:0 0 auto}
 .build-stamp{margin-top:8px;color:var(--muted);font-size:.68rem;font-weight:900;letter-spacing:.06em;opacity:.75}
 
-/* Printing: only the label prints, auto-fitted to a 4.25 x 1.25 inch Zebra label. */
+/* Printing: Matches the narrow hardware feed and rotates content 90 degrees */
 #printSheet{display:none}
 @media print{
-@page{size:4.25in 1.25in;margin:0}
-html,body{width:4.25in!important;height:1.25in!important;margin:0!important;padding:0!important;background:#fff!important;overflow:hidden!important}
-body>*:not(#printSheet){display:none!important}
-#printSheet{display:flex!important;flex-direction:column;justify-content:center;align-items:center;position:absolute;left:0;top:0;width:4.25in!important;height:1.25in!important;margin:0;padding:0.0625in;box-sizing:border-box;overflow:hidden}
-#printSheet img{display:block;max-width:100%;max-height:100%;object-fit:contain;flex-shrink:1;image-rendering:pixelated;margin:0;padding:0}
+  @page{size:1.25in 4.25in;margin:0}
+  html,body{width:1.25in!important;height:4.25in!important;margin:0!important;padding:0!important;background:#fff!important;overflow:hidden!important}
+  body>*:not(#printSheet){display:none!important}
+  
+  #printSheet{
+    display:block!important;
+    position:absolute;
+    left:0;
+    top:0;
+    width:1.25in!important;
+    height:4.25in!important;
+    margin:0;
+    padding:0;
+    overflow:hidden;
+  }
+  
+  #printSheet img{
+    display:block;
+    position:absolute;
+    top:50%;
+    left:50%;
+    width:4.15in; 
+    height:1.15in; 
+    max-width:none!important;
+    /* Translate centers it perfectly, rotate spins it lengthwise down the label */
+    transform:translate(-50%, -50%) rotate(90deg);
+    object-fit:contain;
+    image-rendering:pixelated;
+  }
 }
 </style>
 </head>
