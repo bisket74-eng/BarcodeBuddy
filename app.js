@@ -1820,16 +1820,14 @@ function renderFullscreen() {
 }
 
 /*
-  Export: one PDF on a landscape 11 x 8.5 sheet. The barcode label is 3.5
-  inches wide by 1 inch tall (barcode with the tracking number underneath),
-  centered top to bottom and set against the left margin.
-  The bars and number are vector shapes and text, so they print sharp.
+  Export: a plain PNG picture that is exactly the label - 3.5 inches wide by
+  1 inch tall (1050 x 300 pixels at 300 dpi) - with the barcode on top and the
+  tracking number underneath. No page around it, so a label printer prints it
+  edge to edge on the label.
 */
-const LABEL_WIDTH_PT = 252; /* 3.5 in */
-const LABEL_HEIGHT_PT = 72; /* 1 in */
-const PAGE_WIDTH_PT = 792; /* 11 in, landscape */
-const PAGE_HEIGHT_PT = 612; /* 8.5 in, landscape */
-const LEFT_MARGIN_PT = 36; /* half an inch */
+const LABEL_DPI = 300;
+const LABEL_WIDTH_PX = 3.5 * LABEL_DPI;
+const LABEL_HEIGHT_PX = 1 * LABEL_DPI;
 
 /* Reads the Code 128 bar pattern as runs of modules: [start, width, ...]. */
 function getBarcodeModules(value) {
@@ -1868,92 +1866,97 @@ function getBarcodeModules(value) {
   return { bars, modules: probe.width };
 }
 
-function buildLabelPdf(value, barData) {
-  const { bars, modules } = barData;
-  const text = groupNumber(value);
-
-  /* Helvetica-Bold widths: digits 556, space 278, "?" 611 (per 1000 em). */
-  const textUnits = [...text].reduce(
-    (sum, ch) => sum + (ch === " " ? 278 : ch === "?" ? 611 : 556),
-    0
-  ) / 1000;
-
-  const designWidth = LABEL_WIDTH_PT;
-  const designHeight = LABEL_HEIGHT_PT;
-
-  const fontSize = Math.min(12, (designWidth - 16) / textUnits);
-  const textWidth = textUnits * fontSize;
-  const textX = (designWidth - textWidth) / 2;
-  const textY = 6;
-
-  /* 10 modules of blank space each side, as Code 128 requires. */
-  const moduleWidth = (designWidth - 8) / (modules + 20);
-  const barsLeft = (designWidth - modules * moduleWidth) / 2;
-  const barsBottom = 21;
-  const barsHeight = designHeight - 6 - barsBottom;
-
-  const pageWidth = PAGE_WIDTH_PT;
-  const pageHeight = PAGE_HEIGHT_PT;
-
-  /* Against the left margin, centered top to bottom. */
-  const labelX = LEFT_MARGIN_PT;
-  const labelY = (pageHeight - designHeight) / 2;
-
-  const fmt = (n) => n.toFixed(3);
-  let content = "q\n1 1 1 rg\n0 0 " + pageWidth + " " + pageHeight + " re f\n";
-
-  content +=
-    "1 0 0 1 " + fmt(labelX) + " " + fmt(labelY) + " cm\n0 0 0 rg\n";
-
-  bars.forEach(([start, width]) => {
-    content +=
-      fmt(barsLeft + start * moduleWidth) + " " + barsBottom + " " +
-      fmt(width * moduleWidth) + " " + barsHeight + " re f\n";
-  });
-
-  content +=
-    "BT /F1 " + fmt(fontSize) + " Tf " + fmt(textX) + " " + textY +
-    " Td (" + text + ") Tj ET\nQ\n";
-
-  const objects = [
-    "<< /Type /Catalog /Pages 2 0 R >>",
-    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + pageWidth + " " +
-      pageHeight + "] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
-    "<< /Length " + content.length + " >>\nstream\n" + content + "endstream",
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>"
-  ];
-
-  let pdf = "%PDF-1.4\n";
-  const offsets = [];
-
-  objects.forEach((body, index) => {
-    offsets.push(pdf.length);
-    pdf += (index + 1) + " 0 obj\n" + body + "\nendobj\n";
-  });
-
-  const xrefAt = pdf.length;
-  pdf += "xref\n0 " + (objects.length + 1) + "\n0000000000 65535 f \n";
-  offsets.forEach((offset) => {
-    pdf += String(offset).padStart(10, "0") + " 00000 n \n";
-  });
-  pdf += "trailer\n<< /Size " + (objects.length + 1) + " /Root 1 0 R >>\nstartxref\n" +
-    xrefAt + "\n%%EOF";
-
-  const bytes = new Uint8Array(pdf.length);
-  for (let i = 0; i < pdf.length; i += 1) {
-    bytes[i] = pdf.charCodeAt(i) & 255;
-  }
-
-  return new Blob([bytes], { type: "application/pdf" });
-}
-
-function createLabelPdf(value) {
+function createExportCanvas(value) {
   if (!window.bwipjs?.toCanvas) {
     throw new Error("The barcode generator could not load.");
   }
 
-  return buildLabelPdf(value, getBarcodeModules(value));
+  const { bars, modules } = getBarcodeModules(value);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = LABEL_WIDTH_PX;
+  canvas.height = LABEL_HEIGHT_PX;
+
+  const context = canvas.getContext("2d");
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, LABEL_WIDTH_PX, LABEL_HEIGHT_PX);
+
+  /* Whole pixels per bar keeps every bar crisp. Leave 10 modules of blank
+     space each side, as Code 128 requires. */
+  const scale = Math.max(1, Math.floor((LABEL_WIDTH_PX - 16) / (modules + 20)));
+  const barsLeft = Math.round((LABEL_WIDTH_PX - modules * scale) / 2);
+  const barsTop = 20;
+  const barsHeight = 200;
+
+  context.fillStyle = "#000000";
+  bars.forEach(([start, width]) => {
+    context.fillRect(barsLeft + start * scale, barsTop, width * scale, barsHeight);
+  });
+
+  const text = groupNumber(value);
+  let fontSize = 46;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.font = `700 ${fontSize}px Arial, Helvetica, sans-serif`;
+
+  while (context.measureText(text).width > LABEL_WIDTH_PX - 24 && fontSize > 16) {
+    fontSize -= 1;
+    context.font = `700 ${fontSize}px Arial, Helvetica, sans-serif`;
+  }
+
+  context.fillText(text, LABEL_WIDTH_PX / 2, 264);
+
+  return canvas;
+}
+
+/* Adds a "pHYs" chunk so the PNG reports 300 dpi (3.5" x 1" when printed). */
+function crc32(bytes) {
+  let crc = -1;
+
+  for (let i = 0; i < bytes.length; i += 1) {
+    crc ^= bytes[i];
+
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+
+  return (crc ^ -1) >>> 0;
+}
+
+async function tagPngWithDpi(blob, dpi) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const pixelsPerMeter = Math.round(dpi / 0.0254);
+
+  /* The IHDR chunk ends at byte 33 (8 signature + 25 chunk). */
+  const chunk = new Uint8Array(21);
+  const view = new DataView(chunk.buffer);
+  view.setUint32(0, 9);
+  chunk.set([0x70, 0x48, 0x59, 0x73], 4);
+  view.setUint32(8, pixelsPerMeter);
+  view.setUint32(12, pixelsPerMeter);
+  chunk[16] = 1;
+  view.setUint32(17, crc32(chunk.subarray(4, 17)));
+
+  const tagged = new Uint8Array(bytes.length + chunk.length);
+  tagged.set(bytes.subarray(0, 33), 0);
+  tagged.set(chunk, 33);
+  tagged.set(bytes.subarray(33), 33 + chunk.length);
+
+  return new Blob([tagged], { type: "image/png" });
+}
+
+function canvasToBlob(canvas) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("The barcode image could not be created."));
+        return;
+      }
+
+      tagPngWithDpi(blob, LABEL_DPI).then(resolve, () => resolve(blob));
+    }, "image/png");
+  });
 }
 
 function safeFilename(value) {
@@ -1974,9 +1977,9 @@ function downloadBlob(blob, filename) {
 
 async function shareBarcode(value) {
   try {
-    const blob = createLabelPdf(value);
-    const file = new File([blob], `barcode-${safeFilename(value)}.pdf`, {
-      type: "application/pdf"
+    const blob = await canvasToBlob(createExportCanvas(value));
+    const file = new File([blob], `barcode-${safeFilename(value)}.png`, {
+      type: "image/png"
     });
 
     if (navigator.share && navigator.canShare?.({ files: [file] })) {
@@ -1995,8 +1998,8 @@ async function shareBarcode(value) {
 
 async function downloadBarcode(value) {
   try {
-    const blob = createLabelPdf(value);
-    downloadBlob(blob, `barcode-${safeFilename(value)}.pdf`);
+    const blob = await canvasToBlob(createExportCanvas(value));
+    downloadBlob(blob, `barcode-${safeFilename(value)}.png`);
     showToast("Label downloaded");
   } catch (error) {
     showToast(error?.message || "The barcode label could not be downloaded.");
