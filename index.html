@@ -45,14 +45,14 @@
 .current-number-clear{flex:0 0 auto}
 .build-stamp{margin-top:8px;color:var(--muted);font-size:.68rem;font-weight:900;letter-spacing:.06em;opacity:.75}
 
-/* Printing: only the label prints, at its true size of 3.5 inches wide x 1 inch tall. */
+/* Printing: only the label prints, auto-fitted to a 4.25 x 1.25 inch Zebra label. */
 #printSheet{display:none}
-@page{size:3.5in 1in;margin:0}
 @media print{
-html,body{margin:0!important;padding:0!important;background:#fff!important;height:auto!important;min-height:0!important;overflow:visible!important}
+@page{size:4.25in 1.25in;margin:0}
+html,body{width:4.25in!important;height:1.25in!important;margin:0!important;padding:0!important;background:#fff!important;overflow:hidden!important}
 body>*:not(#printSheet){display:none!important}
-#printSheet{display:block!important;width:3.5in;height:1in;margin:0;padding:0;overflow:hidden}
-#printSheet img{display:block;width:3.5in;height:1in;margin:0;padding:0;image-rendering:pixelated}
+#printSheet{display:flex!important;flex-direction:column;justify-content:center;align-items:center;position:absolute;left:0;top:0;width:4.25in!important;height:1.25in!important;margin:0;padding:0.0625in;box-sizing:border-box;overflow:hidden}
+#printSheet img{display:block;max-width:100%;max-height:100%;object-fit:contain;flex-shrink:1;image-rendering:pixelated;margin:0;padding:0}
 }
 </style>
 </head>
