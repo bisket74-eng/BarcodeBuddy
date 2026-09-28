@@ -1740,7 +1740,7 @@ function renderResults() {
     printButton.className = "share-button";
     printButton.type = "button";
     printButton.style.gridColumn = "1 / -1";
-    printButton.textContent = "Print Label (1 x 3.5 in)";
+    printButton.textContent = "Print Label (3.5 x 1 in)";
     printButton.addEventListener("click", () => printBarcode(value));
 
     actions.append(printButton, shareButton, downloadButton);
@@ -1827,11 +1827,11 @@ function renderFullscreen() {
 }
 
 /*
-  Export: a PNG picture made for a Zebra ZD411 with a 1 inch by 3.5 inch label.
-  The picture is 1 inch wide by 3.5 inches tall (203 x 711 pixels at 203 dpi,
-  the ZD411's standard resolution). The barcode runs along the long side of
-  the label, with the tracking number beside it, so it prints long and skinny
-  and fills the label. It is the label only, with no page around it.
+  Export: a PNG picture made for a Zebra ZD411 with a 3.5 inch by 1 inch
+  label. The picture is 3.5 inches wide by 1 inch tall (711 x 203 pixels at
+  203 dpi, the ZD411's standard resolution). The barcode runs along the long
+  side of the label with the tracking number underneath, centered on the
+  label. It is the label only, with no page around it.
 */
 const LABEL_DPI = 203;
 const LABEL_SHORT_PX = 1 * LABEL_DPI; /* 203: across the label */
@@ -1881,26 +1881,20 @@ function createExportCanvas(value) {
 
   const { bars, modules } = getBarcodeModules(value);
 
-  /* Draw the label lying flat (711 wide x 203 tall), then turn it a quarter
-     turn so it stands on the 1 inch by 3.5 inch label. */
   const canvas = document.createElement("canvas");
-  canvas.width = LABEL_SHORT_PX;
-  canvas.height = LABEL_LONG_PX;
+  canvas.width = LABEL_LONG_PX;
+  canvas.height = LABEL_SHORT_PX;
 
   const context = canvas.getContext("2d");
   context.fillStyle = "#ffffff";
-  context.fillRect(0, 0, LABEL_SHORT_PX, LABEL_LONG_PX);
-  context.setTransform(0, -1, 1, 0, 0, LABEL_LONG_PX);
-
-  const flatWidth = LABEL_LONG_PX;
-  const flatHeight = LABEL_SHORT_PX;
+  context.fillRect(0, 0, LABEL_LONG_PX, LABEL_SHORT_PX);
 
   /* Whole pixels per bar keeps every bar crisp. Leave 10 modules of blank
      space each side, as Code 128 requires. */
-  const scale = Math.max(1, Math.floor((flatWidth - 16) / (modules + 20)));
-  const barsLeft = Math.round((flatWidth - modules * scale) / 2);
+  const scale = Math.max(1, Math.floor((LABEL_LONG_PX - 16) / (modules + 20)));
+  const barsLeft = Math.round((LABEL_LONG_PX - modules * scale) / 2);
   const barsTop = 12;
-  const barsHeight = flatHeight - barsTop - 52;
+  const barsHeight = LABEL_SHORT_PX - barsTop - 52;
 
   context.fillStyle = "#000000";
   bars.forEach(([start, width]) => {
@@ -1913,13 +1907,12 @@ function createExportCanvas(value) {
   context.textBaseline = "middle";
   context.font = `700 ${fontSize}px Arial, Helvetica, sans-serif`;
 
-  while (context.measureText(text).width > flatWidth - 24 && fontSize > 12) {
+  while (context.measureText(text).width > LABEL_LONG_PX - 24 && fontSize > 12) {
     fontSize -= 1;
     context.font = `700 ${fontSize}px Arial, Helvetica, sans-serif`;
   }
 
-  context.fillText(text, flatWidth / 2, flatHeight - 26);
-  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.fillText(text, LABEL_LONG_PX / 2, LABEL_SHORT_PX - 26);
 
   return canvas;
 }
@@ -2022,8 +2015,8 @@ async function downloadBarcode(value) {
 }
 
 /*
-  Print: puts the label into a hidden sheet that is set to exactly 1 inch by
-  3.5 inches in the print styles (see index.html), then opens the browser's
+  Print: puts the label into a hidden sheet that is set to exactly 3.5 inches by
+  1 inch in the print styles (see index.html), then opens the browser's
   print screen. The size is given in real inches, so the label prints at its
   true size without "shrink to fit" and without filling the page.
 */
