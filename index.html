@@ -45,7 +45,7 @@
 .current-number-clear{flex:0 0 auto}
 .build-stamp{margin-top:8px;color:var(--muted);font-size:.68rem;font-weight:900;letter-spacing:.06em;opacity:.75}
 
-/* Printing: Hardcoded dimensions with overflow hidden to prevent Chrome auto-landscape */
+/* Printing: Renders full size horizontally, then rotates the entire container box */
 #printSheet{display:none}
 @media print{
   @page{size:1.25in 4.25in;margin:0}
@@ -56,10 +56,14 @@
   #printSheet{
     display:block!important;
     position:absolute;
-    left:0;
-    top:0;
-    width:1.25in!important;
-    height:4.25in!important;
+    left:50%;
+    top:50%;
+    /* Full natural size before rotation */
+    width:4.15in!important;
+    height:1.15in!important;
+    /* Rotate the container box smoothly from the center */
+    transform:translate(-50%, -50%) rotate(90deg);
+    transform-origin:center center;
     margin:0;
     padding:0;
     overflow:hidden!important;
@@ -67,16 +71,12 @@
   
   #printSheet img{
     display:block;
-    position:absolute;
-    top:50%;
-    left:50%;
-    width:4.15in!important; 
-    height:1.15in!important; 
-    max-width:none!important;
-    max-height:none!important;
-    transform:translate(-50%, -50%) rotate(90deg);
+    width:100%!important;
+    height:100%!important;
     object-fit:contain;
     image-rendering:pixelated;
+    margin:0;
+    padding:0;
   }
 }
 </style>
