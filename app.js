@@ -1819,42 +1819,141 @@ function renderFullscreen() {
   }
 }
 
-function createExportCanvas(value) {
-  const barcodeCanvas = document.createElement("canvas");
-  drawBarcode(barcodeCanvas, value, true);
+/*
+  Export size: a 3 inch by 1 inch label, drawn at 300 dpi (900 x 300 pixels).
+  The PNG is also tagged with 300 dpi so printers and image apps treat it as
+  exactly 3" x 1".
+*/
+const LABEL_DPI = 300;
+const LABEL_WIDTH = 3 * LABEL_DPI;
+const LABEL_HEIGHT = 1 * LABEL_DPI;
 
-  const padding = 42;
-  const numberHeight = 86;
+function createExportCanvas(value) {
+  const sideMargin = 24;
+  const topMargin = 20;
+  const textZone = 64;
+  const maxBarcodeWidth = LABEL_WIDTH - sideMargin * 2;
+
+  /* Measure the barcode at 1 pixel per module, then pick the largest whole
+     number scale that fits so every bar stays crisp. */
+  const probe = document.createElement("canvas");
+  bwipjs.toCanvas(probe, {
+    bcid: "code128",
+    text: value,
+    scale: 1,
+    height: 10,
+    includetext: false,
+    paddingwidth: 0,
+    paddingheight: 0,
+    backgroundcolor: "FFFFFF",
+    barcolor: "000000"
+  });
+
+  const scale = Math.max(1, Math.floor(maxBarcodeWidth / probe.width));
+  const barcodeCanvas = document.createElement("canvas");
+  bwipjs.toCanvas(barcodeCanvas, {
+    bcid: "code128",
+    text: value,
+    scale,
+    height: 20,
+    includetext: false,
+    paddingwidth: 0,
+    paddingheight: 0,
+    backgroundcolor: "FFFFFF",
+    barcolor: "000000"
+  });
+
   const exportCanvas = document.createElement("canvas");
-  exportCanvas.width = barcodeCanvas.width + padding * 2;
-  exportCanvas.height = barcodeCanvas.height + padding * 2 + numberHeight;
+  exportCanvas.width = LABEL_WIDTH;
+  exportCanvas.height = LABEL_HEIGHT;
 
   const context = exportCanvas.getContext("2d");
   context.fillStyle = "#ffffff";
-  context.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
-  context.drawImage(barcodeCanvas, padding, padding);
+  context.fillRect(0, 0, LABEL_WIDTH, LABEL_HEIGHT);
 
+  const barcodeHeight = LABEL_HEIGHT - topMargin - textZone;
+  const barcodeWidth = Math.min(barcodeCanvas.width, maxBarcodeWidth);
+  context.imageSmoothingEnabled = false;
+  context.drawImage(
+    barcodeCanvas,
+    0,
+    0,
+    barcodeCanvas.width,
+    barcodeCanvas.height,
+    Math.round((LABEL_WIDTH - barcodeWidth) / 2),
+    topMargin,
+    barcodeWidth,
+    barcodeHeight
+  );
+
+  /* Number underneath, shrunk if needed so it always fits the label. */
+  const text = groupNumber(value);
+  let fontSize = 40;
   context.fillStyle = "#000000";
-  context.font = "700 32px Arial, sans-serif";
   context.textAlign = "center";
   context.textBaseline = "middle";
+  context.font = `700 ${fontSize}px Arial, sans-serif`;
+
+  while (context.measureText(text).width > maxBarcodeWidth && fontSize > 16) {
+    fontSize -= 1;
+    context.font = `700 ${fontSize}px Arial, sans-serif`;
+  }
+
   context.fillText(
-    groupNumber(value),
-    exportCanvas.width / 2,
-    exportCanvas.height - numberHeight / 2
+    text,
+    LABEL_WIDTH / 2,
+    LABEL_HEIGHT - textZone / 2 - 2
   );
 
   return exportCanvas;
 }
 
+/* Adds a "pHYs" chunk so the PNG reports 300 dpi (3" x 1" when printed). */
+function crc32(bytes) {
+  let crc = -1;
+
+  for (let i = 0; i < bytes.length; i += 1) {
+    crc ^= bytes[i];
+
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+
+  return (crc ^ -1) >>> 0;
+}
+
+async function tagPngWithDpi(blob, dpi) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const pixelsPerMeter = Math.round(dpi / 0.0254);
+
+  /* IHDR chunk ends at byte 33 (8 signature + 25 chunk). */
+  const chunk = new Uint8Array(21);
+  const view = new DataView(chunk.buffer);
+  view.setUint32(0, 9);
+  chunk.set([0x70, 0x48, 0x59, 0x73], 4);
+  view.setUint32(8, pixelsPerMeter);
+  view.setUint32(12, pixelsPerMeter);
+  chunk[16] = 1;
+  view.setUint32(17, crc32(chunk.subarray(4, 17)));
+
+  const tagged = new Uint8Array(bytes.length + chunk.length);
+  tagged.set(bytes.subarray(0, 33), 0);
+  tagged.set(chunk, 33);
+  tagged.set(bytes.subarray(33), 33 + chunk.length);
+
+  return new Blob([tagged], { type: "image/png" });
+}
+
 function canvasToBlob(canvas) {
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
-      if (blob) {
-        resolve(blob);
-      } else {
+      if (!blob) {
         reject(new Error("The barcode image could not be created."));
+        return;
       }
+
+      tagPngWithDpi(blob, LABEL_DPI).then(resolve, () => resolve(blob));
     }, "image/png");
   });
 }
@@ -2001,6 +2100,117 @@ window.addEventListener("orientationchange", () => {
       renderFullscreen();
     }
   }, 180);
+});
+
+/* Desktop / laptop keyboard entry: type straight on the main page. */
+function isTypingTarget(target) {
+  if (!target || !target.tagName) {
+    return false;
+  }
+
+  return (
+    target.isContentEditable ||
+    ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)
+  );
+}
+
+function keyboardEntryAvailable() {
+  return elements.fullscreenModal.hidden && elements.photoPanel.hidden;
+}
+
+function ensureNumberPanelOpen() {
+  if (elements.numberPanel.hidden) {
+    openNumberPanel();
+  }
+}
+
+document.addEventListener("keydown", (event) => {
+  if (
+    event.key === "Escape" ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.altKey ||
+    event.isComposing ||
+    isTypingTarget(event.target) ||
+    !keyboardEntryAvailable()
+  ) {
+    return;
+  }
+
+  const key = event.key;
+
+  if (/^[0-9?]$/.test(key)) {
+    event.preventDefault();
+    ensureNumberPanelOpen();
+    insertAtCaret(key);
+    return;
+  }
+
+  /* Keys below only act once the number panel is showing. */
+  if (elements.numberPanel.hidden) {
+    return;
+  }
+
+  if (key === "Backspace") {
+    event.preventDefault();
+    backspaceAtCaret();
+  } else if (key === "Delete") {
+    event.preventDefault();
+
+    if (keypadCaret < numberText.length) {
+      keypadCaret += 1;
+      backspaceAtCaret();
+    }
+  } else if (key === "ArrowLeft") {
+    event.preventDefault();
+    handleKeypadKey("left");
+  } else if (key === "ArrowRight") {
+    event.preventDefault();
+    handleKeypadKey("right");
+  } else if (key === "Home") {
+    event.preventDefault();
+    keypadCaret = 0;
+    renderNumberDisplay();
+  } else if (key === "End") {
+    event.preventDefault();
+    keypadCaret = numberText.length;
+    renderNumberDisplay();
+  } else if (key === "Enter") {
+    const onOtherButton =
+      event.target.tagName === "BUTTON" &&
+      event.target !== elements.openNumberButton;
+
+    if (!onOtherButton) {
+      event.preventDefault();
+      generateCandidates({ closePanels: true });
+    }
+  }
+});
+
+/* Pasting a number (Ctrl+V) works too. */
+document.addEventListener("paste", (event) => {
+  if (isTypingTarget(event.target) || !keyboardEntryAvailable()) {
+    return;
+  }
+
+  const pasted = (event.clipboardData?.getData("text") || "")
+    .replace(/[^0-9?]/g, "");
+
+  if (!pasted) {
+    return;
+  }
+
+  event.preventDefault();
+  ensureNumberPanelOpen();
+
+  for (const character of pasted) {
+    if (numberText.length >= MAX_BARCODE_LENGTH) {
+      showToast("Barcode numbers are limited to 26 digits");
+      break;
+    }
+
+    insertAtCaret(character);
+  }
 });
 
 document.addEventListener("keydown", (event) => {
