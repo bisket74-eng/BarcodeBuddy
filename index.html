@@ -45,11 +45,14 @@
 .current-number-clear{flex:0 0 auto}
 .build-stamp{margin-top:8px;color:var(--muted);font-size:.68rem;font-weight:900;letter-spacing:.06em;opacity:.75}
 
-/* Printing: Let the Zebra driver control the page size, just rotate and center the barcode */
+/* Printing: Set exact narrow paper size AND rotate the barcode */
 #printSheet{display:none}
 @media print{
-  /* Removed @page to stop fighting the Zebra driver's pre-set label size */
-  html,body{margin:0!important;padding:0!important;background:#fff!important;width:100%!important;height:100%!important;overflow:hidden!important}
+  /* Tell browser the paper is actually a narrow 1.25 x 4.25 strip */
+  @page{size:1.25in 4.25in;margin:0}
+  
+  /* Prevent scrollbars or browser margins from clipping the unrotated image */
+  html,body{width:1.25in!important;height:4.25in!important;margin:0!important;padding:0!important;background:#fff!important;overflow:visible!important}
   body>*:not(#printSheet){display:none!important}
   
   #printSheet{
@@ -57,11 +60,11 @@
     position:absolute;
     left:0;
     top:0;
-    width:100%!important;
-    height:100%!important;
+    width:1.25in!important;
+    height:4.25in!important;
     margin:0;
     padding:0;
-    overflow:hidden;
+    overflow:visible!important;
   }
   
   #printSheet img{
@@ -69,11 +72,12 @@
     position:absolute;
     top:50%;
     left:50%;
-    /* Hardcode the physical dimensions of the barcode */
+    /* Keep the hardcoded physical dimensions of the barcode */
     width:4.15in!important; 
     height:1.15in!important; 
     max-width:none!important;
-    /* Rotate 90 degrees to run lengthwise down the feed */
+    max-height:none!important;
+    /* Translate offsets the 50% positioning, rotate spins it lengthwise */
     transform:translate(-50%, -50%) rotate(90deg);
     object-fit:contain;
     image-rendering:pixelated;
