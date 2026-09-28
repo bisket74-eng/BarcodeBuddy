@@ -1740,7 +1740,7 @@ function renderResults() {
     printButton.className = "share-button";
     printButton.type = "button";
     printButton.style.gridColumn = "1 / -1";
-    printButton.textContent = "Print Label (3.5 x 1 in)";
+    printButton.textContent = "Print Label 4 x 1 inch (zebra)";
     printButton.addEventListener("click", () => printBarcode(value));
 
     actions.append(printButton, shareButton, downloadButton);
