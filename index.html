@@ -45,38 +45,38 @@
 .current-number-clear{flex:0 0 auto}
 .build-stamp{margin-top:8px;color:var(--muted);font-size:.68rem;font-weight:900;letter-spacing:.06em;opacity:.75}
 
-/* Printing: Renders full size horizontally, then rotates the entire container box */
+/* Printing: Let the Zebra driver control the page size, just rotate and center the barcode */
 #printSheet{display:none}
 @media print{
-  @page{size:1.25in 4.25in;margin:0}
-  
-  html,body{width:1.25in!important;height:4.25in!important;margin:0!important;padding:0!important;background:#fff!important;overflow:hidden!important}
+  /* Removed @page to stop fighting the Zebra driver's pre-set label size */
+  html,body{margin:0!important;padding:0!important;background:#fff!important;width:100%!important;height:100%!important;overflow:hidden!important}
   body>*:not(#printSheet){display:none!important}
   
   #printSheet{
     display:block!important;
     position:absolute;
-    left:50%;
-    top:50%;
-    /* Full natural size before rotation */
-    width:4.15in!important;
-    height:1.15in!important;
-    /* Rotate the container box smoothly from the center */
-    transform:translate(-50%, -50%) rotate(90deg);
-    transform-origin:center center;
+    left:0;
+    top:0;
+    width:100%!important;
+    height:100%!important;
     margin:0;
     padding:0;
-    overflow:hidden!important;
+    overflow:hidden;
   }
   
   #printSheet img{
     display:block;
-    width:100%!important;
-    height:100%!important;
+    position:absolute;
+    top:50%;
+    left:50%;
+    /* Hardcode the physical dimensions of the barcode */
+    width:4.15in!important; 
+    height:1.15in!important; 
+    max-width:none!important;
+    /* Rotate 90 degrees to run lengthwise down the feed */
+    transform:translate(-50%, -50%) rotate(90deg);
     object-fit:contain;
     image-rendering:pixelated;
-    margin:0;
-    padding:0;
   }
 }
 </style>
